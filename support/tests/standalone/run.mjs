@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { testEnvironment } from './environment.mjs'
+import { developmentEnvironment } from './dev-environment.mjs'
 
 const directory = path.dirname(fileURLToPath(import.meta.url))
 const support = path.resolve(directory, '../..')
@@ -163,9 +164,53 @@ function test(suite) {
   )
 }
 
+function buildDevelopmentServer() {
+  execute(process.execPath, [
+    require.resolve('typescript/bin/tsc'),
+    '-p',
+    path.join(directory, 'tsconfig.dev.json'),
+  ])
+}
+
 async function main() {
   const action = process.argv[2]
   switch (action) {
+    case 'dev-build':
+      return buildDevelopmentServer()
+    case 'dev-seed': {
+      developmentEnvironment()
+      await database()
+      const { seedDevelopmentData } = await import('./dev-fixtures.mjs')
+      // The seed command uses the same fixed database as the test runner.
+      Object.assign(process.env, testEnvironment())
+      console.log(await seedDevelopmentData())
+      return
+    }
+    case 'dev-reset': {
+      developmentEnvironment()
+      await database()
+      Object.assign(process.env, testEnvironment())
+      const { resetDevelopmentData, seedDevelopmentData } = await import(
+        './dev-fixtures.mjs'
+      )
+      await resetDevelopmentData()
+      await seedDevelopmentData()
+      console.log(
+        'Only the three synthetic users were reset in local support_test. Telegram topics and files were not deleted.'
+      )
+      return
+    }
+    case 'dev': {
+      const env = developmentEnvironment()
+      infra()
+      await database()
+      buildDevelopmentServer()
+      return execute(
+        process.execPath,
+        [path.join(directory, 'dev-server.mjs')],
+        { env }
+      )
+    }
     case 'generate':
       return generate()
     case 'typecheck':

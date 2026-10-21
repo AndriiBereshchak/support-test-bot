@@ -15,7 +15,12 @@
     "test:all": "node run.mjs all",
     "infra:up": "node run.mjs infra",
     "db:prepare": "node run.mjs database",
-    "format": "prettier --check . --ignore-path .gitignore"
+    "format": "prettier --check . --ignore-path .gitignore",
+    "dev": "node run.mjs dev",
+    "dev:build": "node run.mjs dev-build",
+    "dev:seed": "node run.mjs dev-seed",
+    "dev:reset": "node run.mjs dev-reset",
+    "dev:smoke": "node dev-smoke.mjs"
   },
   "dependencies": {
     "@fastify/multipart": "^10.1.0",
