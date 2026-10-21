@@ -1,0 +1,62 @@
+# Test infrastructure for support integration tests.
+#
+# Usage:
+#   yarn test:infra:up       — start all services
+#   yarn test:migrate        — prisma migrate deploy against support_test
+#   yarn test                — everything above + vitest
+#   yarn test:infra:down     — stop & remove everything (incl. volumes)
+#
+# Ports mirror the exchange test stack (1xxxx / 55432) so a developer only has
+# to remember one set. The two stacks therefore CANNOT run at the same time —
+# tests/infra-up.ts detects that case and says so, instead of quietly attaching
+# to exchange's postgres, where `support_test` does not exist.
+
+services:
+  postgres-support:
+    # Plain postgres: unlike exchange, this schema has no hypertables and no
+    # continuous aggregates, so there is nothing here that needs TimescaleDB.
+    image: postgres:16-alpine
+    container_name: binodex-test-pg-support
+    environment:
+      POSTGRES_DB: support_test
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+    ports:
+      - '55432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U test -d support_test']
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql/data # in-memory — fast, ephemeral
+
+  nats:
+    image: nats:2-alpine
+    container_name: binodex-test-nats-support
+    # -js: JetStream (matches prod). -m 8222: monitoring HTTP port the
+    # healthcheck probes — without the flag NATS never exposes it and the
+    # check can't pass.
+    command: ['-js', '-m', '8222']
+    ports:
+      - '14222:4222'
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'wget -q --spider http://localhost:8222/healthz || exit 1',
+        ]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    container_name: binodex-test-redis-support
+    ports:
+      - '16379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 1s
+      timeout: 3s
+      retries: 30

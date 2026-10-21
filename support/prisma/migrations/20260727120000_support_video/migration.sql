@@ -1,0 +1,26 @@
+-- Support chat: video attachments.
+--
+-- ONE statement in this file, on purpose. Prisma hands a migration to Postgres
+-- as a single multi-statement batch, and Postgres wraps a multi-statement batch
+-- in an implicit transaction — which is precisely where `ALTER TYPE ... ADD
+-- VALUE` is refused ("cannot run inside a transaction block") on Postgres 11
+-- and older. A file holding nothing else keeps the statement standing alone, so
+-- it applies on every server generation. On 12+ the restriction is narrower
+-- (the new label may not be USED in the same transaction that adds it), and
+-- that also holds here: nothing below reads or writes 'VIDEO'.
+--
+-- IF NOT EXISTS so a re-run — a retried `migrate deploy`, a stand rebuilt from
+-- a partially applied dump — is a no-op instead of a hard failure.
+ALTER TYPE "SupportAttachmentKind" ADD VALUE IF NOT EXISTS 'VIDEO';
+
+-- No data migration accompanies this one, and none is missing.
+--
+-- The same release also moves attachment storage from `<ticketId>/<uuid>.<ext>`
+-- to `media/<ticketId>/...` (images + video, published statically by exchange)
+-- and `docs/<ticketId>/...` (PDFs + documents, authenticated stream only). That
+-- would normally need a backfill of `support_attachments.storage_path` plus a
+-- file move on the shared volume — but the support chat has never been
+-- deployed, so `support_attachments` is empty in every environment that
+-- matters. Writing a rewrite here would be dead code guarding a case that
+-- cannot occur; if that ever stops being true the fix is a new migration
+-- alongside a `mv`, not a resurrection of this comment.

@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+// Minimal client-side slice of exchange/protos/admin.proto: only what the
+// operator-tools bot calls. proto-loader matches by service + method name,
+// so this file must stay wire-compatible with the exchange definition —
+// same service name, same rpc name, same field numbers. If exchange ever
+// changes DeleteUser, this copy changes with it.
+
+service Exchange {
+  rpc DeleteUser(DeleteUserRequest) returns (AnyResponse) {};
+}
+
+message DeleteUserRequest {
+  string uid = 1;
+}
+
+message AnyResponse {
+  string result = 1;
+}

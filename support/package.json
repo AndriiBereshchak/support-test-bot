@@ -1,0 +1,56 @@
+{
+  "name": "@binodex/support",
+  "version": "0.0.1",
+  "main": "./dist/server.js",
+  "private": true,
+  "scripts": {
+    "clean": "rimraf dist coverage",
+    "typecheck": "tsc --noEmit",
+    "prisma-generate": "prisma generate",
+    "prebuild": "npm-run-all clean typecheck",
+    "build": "tsc",
+    "start": "node ./dist/server.js",
+    "dev": "npm-run-all build start",
+    "lint": "npx eslint src",
+    "lint:fix": "npx eslint --fix src",
+    "prettier": "npx prettier src --check",
+    "prettier:fix": "yarn prettier --write",
+    "format": "yarn prisma format && yarn prettier:fix && yarn lint:fix",
+    "test:infra:up": "node --experimental-strip-types --no-warnings tests/infra-up.ts",
+    "test:infra:down": "docker compose -f docker-compose.test.yml down -v",
+    "test:wait": "node --experimental-strip-types --no-warnings tests/wait-for-services.ts",
+    "test:migrate": "DATABASE_SUPPORT='postgresql://test:test@127.0.0.1:55432/support_test' npx prisma migrate deploy",
+    "test:run": "vitest run",
+    "test": "prisma generate && yarn typecheck && yarn test:infra:up && yarn test:wait && yarn test:migrate && yarn test:run"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">= 20.x"
+  },
+  "dependencies": {
+    "@binodex/shared": "workspace:^",
+    "@fastify/multipart": "^10.1.0",
+    "@grpc/grpc-js": "^1.12.2",
+    "@grpc/proto-loader": "^0.7.13",
+    "@prisma/client": "^6.15.0",
+    "@sentry/node": "^9.35.0",
+    "dotenv": "^17.0.1",
+    "fastify": "^5.10.0",
+    "grammy": "^1.45.1",
+    "ioredis": "^5.3.2",
+    "module-alias": "^2.2.2",
+    "nats": "^2.29.0",
+    "prisma": "^6.15.0",
+    "prom-client": "^15.1.3",
+    "sharp": "^0.34.2",
+    "winston": "^3.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.10",
+    "npm-run-all": "^4.1.5",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.8.3",
+    "vitest": "^1.6.0"
+  },
+  "packageManager": "yarn@4.9.4"
+}

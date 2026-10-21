@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    /* Language and Environment */
+    "target": "ESNext",
+    "lib": ["es2022"],
+
+    /* Modules */
+    "module": "commonjs",
+    "moduleResolution": "node10",
+    "ignoreDeprecations": "5.0",
+    "resolveJsonModule": true,
+    "paths": {
+      "@apps/*": ["./src/apps/*"],
+      "@core/*": ["./src/core/*"],
+      "@config/*": ["./src/config/*"],
+      "@telegram/*": ["./src/telegram/*"],
+      "@prisma-support": ["./prisma/generated/prisma-support"],
+      "@prisma-exchange": ["../exchange/prisma/generated/prisma-exchange"],
+      "@prisma-affiliate": ["../affiliate/prisma/generated/prisma-affiliate"]
+    },
+
+    /* Emit */
+    "outDir": "./dist",
+
+    /* Interop Constraints */
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+
+    /* Type Checking */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "strictPropertyInitialization": false,
+    "useDefineForClassFields": false,
+
+    /* Completeness */
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["dist", "node_modules", "tests"]
+}

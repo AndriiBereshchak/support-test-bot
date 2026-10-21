@@ -1,0 +1,409 @@
+// Support chat — own database (DATABASE_SUPPORT), own migrations.
+//
+// Cross-service reads (User profile, balances, payments) go through the
+// exchange client via the `@prisma-exchange` path alias — this schema never
+// mirrors exchange tables. Conventions follow the house style: PascalCase
+// model -> snake_case plural table via @@map, camelCase field -> snake_case
+// column via @map, uuid string ids, timestamptz timestamps.
+//
+// Names are deliberately `Support*Ticket*` and tables `support_ticket_*`: the
+// legacy (pre-Talk-Me) `SupportChat` / `SupportChatMessage` models still live
+// in the EXCHANGE database and must not be collided with.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "./generated/prisma-support"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_SUPPORT")
+}
+
+// Which product a ticket belongs to. Only PLATFORM is wired today; PARTNER
+// exists so the affiliate panel can reuse the same service (own forum group,
+// own delivery transport) without a migration.
+enum SupportProduct {
+  PLATFORM
+  PARTNER
+}
+
+enum SupportTicketStatus {
+  OPEN
+  CLOSED
+}
+
+// Who ended the ticket — drives both the closing system message wording and
+// support analytics.
+enum SupportTicketClosedBy {
+  USER
+  AGENT
+  SYSTEM // inactivity sweeper
+}
+
+enum SupportMessageDirection {
+  // Browser -> Telegram topic.
+  IN
+  // Telegram topic -> browser.
+  OUT
+  // Bot-authored lifecycle notice rendered on both sides (opened / closed).
+  SYSTEM
+}
+
+enum SupportSystemKind {
+  TICKET_OPENED
+  TICKET_CLOSED
+}
+
+// IMAGE and VIDEO are the "inline media" half of this enum: they render inside
+// the bubble and are served as plain static files by exchange, while PDF and
+// DOCUMENT stay behind the authenticated stream. `storagePath` encodes that
+// split as a `media/` vs `docs/` prefix — see attachment.service.ts.
+enum SupportAttachmentKind {
+  IMAGE
+  PDF
+  DOCUMENT
+  VIDEO
+}
+
+// A conversation. At most ONE OPEN ticket per (product, userId) — enforced by
+// a partial unique index in the migration, not by application logic, so a
+// double-submit or a redelivered Telegram update can never fork the thread.
+model SupportTicket {
+  id      String         @id @default(uuid()) @db.Uuid
+  product SupportProduct @default(PLATFORM)
+  // Exchange User.id (uuid). Soft cross-DB reference: no FK across databases.
+  userId  String         @map("user_id")
+  // Exchange User.nId — the human-facing number support staff actually use.
+  // Denormalized because the Telegram topic name is built from it and the
+  // topic must stay resolvable even if the exchange DB is briefly unreachable.
+  userNId Int            @map("user_n_id")
+
+  status          SupportTicketStatus    @default(OPEN)
+  closedBy        SupportTicketClosedBy? @map("closed_by")
+  /// WHICH operator closed it, when `closedBy = AGENT`.
+  ///
+  /// `closedBy` alone says only "a human, not the sweeper", which cannot answer
+  /// the one question support analytics is actually asked — how many
+  /// conversations each person handled. A soft reference (no FK) to
+  /// `SupportAgent.id`: it must survive an agent row being deleted, and the id
+  /// is what keeps a person identifiable after they change their display name.
+  closedByAgentId String?                @map("closed_by_agent_id") @db.Uuid
+
+  // Mirror the user actually wrote from (binodex.io / .pro / .app / …), taken
+  // from the request Origin by the exchange proxy. Support needs it on the info
+  // card: the same account reaches us through several domains, and "which site
+  // is he looking at" changes the answer to half the questions asked.
+  originDomain String? @map("origin_domain") @db.VarChar(255)
+
+  // Telegram forum topic binding. chatId is stored per-ticket (not only in
+  // env) so moving support to a new group never orphans historical threads.
+  tgChatId        BigInt? @map("tg_chat_id")
+  tgTopicId       Int?    @map("tg_topic_id")
+  // message_id of the pinned info card, so it can be refreshed in place.
+  tgInfoMessageId Int?    @map("tg_info_message_id")
+
+  // Monotonic sequence allocator for this ticket's messages. Incremented
+  // inside the same transaction as the message insert, which is what makes
+  // `seq` a gap-free cursor for history paging and client-side ordering.
+  lastSeq Int @default(0) @map("last_seq")
+
+  // Unread OUT messages for the user (badge). Reset by the read endpoint.
+  unreadForUser Int @default(0) @map("unread_for_user")
+
+  // Drives the inactivity sweeper and the support SLA view.
+  lastMessageAt      DateTime? @map("last_message_at") @db.Timestamptz()
+  lastUserMessageAt  DateTime? @map("last_user_message_at") @db.Timestamptz()
+  lastAgentMessageAt DateTime? @map("last_agent_message_at") @db.Timestamptz()
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  closedAt  DateTime? @map("closed_at") @db.Timestamptz()
+
+  /// Оценка работы поддержки, 1–5. Показывается пользователю один раз, после
+  /// закрытия диалога, и ставится один раз — `ratedAt` не null означает
+  /// «спрашивать больше не надо», даже если окно закрыли не отвечая (тогда
+  /// null остаётся и предложение вернётся при следующем заходе).
+  rating        Int?      @map("rating") @db.SmallInt
+  /// Необязательный комментарий к низкой оценке. Свободный текст пользователя,
+  /// поэтому ограничен по длине и экранируется на выводе.
+  ratingComment String?   @map("rating_comment") @db.VarChar(2000)
+  ratedAt       DateTime? @map("rated_at") @db.Timestamptz()
+
+  messages    SupportMessage[]
+  attachments SupportAttachment[]
+
+  operatorActions OperatorAction[]
+
+  // A topic now holds EVERY ticket of one user (see SupportUserThread), so the
+  // old `@@unique([tgChatId, tgTopicId])` had to go: it is precisely the rule
+  // that made a second ticket in the same topic impossible. The plain index
+  // keeps the "which ticket does this topic mean?" lookup fast.
+  //
+  // Uniqueness did not disappear, it moved: `SupportUserThread` owns it now,
+  // one topic per user, which is the invariant that actually matters.
+  @@index([tgChatId, tgTopicId])
+  @@index([product, userId, createdAt])
+  @@index([status, lastMessageAt])
+  @@map("support_tickets")
+}
+
+/// The user's permanent Telegram topic — one per (product, user), reused by
+/// every ticket they ever open.
+///
+/// Split out of `SupportTicket` rather than derived from it: the binding has to
+/// survive a ticket closing, and a "find the newest ticket that has a topic"
+/// lookup would be both slower and ambiguous the moment an old topic is
+/// deleted. Uniqueness on (product, userId) is what stops two concurrent first
+/// messages from opening two permanent topics for the same person.
+///
+/// Tickets created BEFORE this table keep their own topic ids and go on
+/// working through them — nothing is migrated, nothing is archived.
+model SupportUserThread {
+  id      String         @id @default(uuid()) @db.Uuid
+  product SupportProduct @default(PLATFORM)
+  userId  String         @map("user_id")
+  /// Denormalised for the topic title, which is `<nId> · <email>`.
+  userNId Int            @map("user_n_id")
+
+  tgChatId        BigInt? @map("tg_chat_id")
+  tgTopicId       Int?    @map("tg_topic_id")
+  tgInfoMessageId Int?    @map("tg_info_message_id")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@unique([product, userId])
+  @@unique([tgChatId, tgTopicId])
+  @@map("support_user_threads")
+}
+
+/**
+ * Временный запрет писать в поддержку.
+ * Строка на пользователя, а не на тикет: запрет переживает закрытие диалога и
+ * действует на все следующие обращения. Одна строка на юзера и переиспользуется
+ * — история «кто и за что» ведётся в `OperatorAction`, а держать здесь ленту
+ * блокировок значит каждый раз выбирать из неё актуальную и рано или поздно
+ * выбрать не ту.
+ * Снятие — это `mutedUntil = null`, а не удаление строки: так видно, что
+ * человека когда-то ограничивали, и кто снял.
+ */
+model SupportMute {
+  id      String         @id @default(uuid()) @db.Uuid
+  product SupportProduct @default(PLATFORM)
+  userId  String         @map("user_id")
+  /// Денормализовано ради читаемых логов и карточки — как в SupportUserThread.
+  userNId Int            @map("user_n_id")
+
+  /// До какого момента запрещено писать. null — запрета нет (сняли вручную).
+  /// Прошедшая дата означает то же самое, но хранит, когда он истёк.
+  mutedUntil DateTime? @map("muted_until") @db.Timestamptz()
+  /// Причина оператора. Видит только поддержка — пользователю не показывается.
+  reason     String?   @db.VarChar(500)
+
+  /// Кто выдал и кто снял: мягкие ссылки на SupportAgent.id, без FK — агента
+  /// могут удалить, а запись должна остаться читаемой.
+  mutedByAgentId   String?   @map("muted_by_agent_id") @db.Uuid
+  mutedAt          DateTime? @map("muted_at") @db.Timestamptz()
+  unmutedByAgentId String?   @map("unmuted_by_agent_id") @db.Uuid
+  unmutedAt        DateTime? @map("unmuted_at") @db.Timestamptz()
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@unique([product, userId])
+  @@index([mutedUntil])
+  @@map("support_mutes")
+}
+
+// One chat bubble. `text` is stored RAW (newlines, emoji, markdown-looking
+// characters untouched) — rendering/escaping is a presentation concern of
+// whichever side displays it.
+model SupportMessage {
+  id       String        @id @default(uuid()) @db.Uuid
+  ticketId String        @map("ticket_id") @db.Uuid
+  ticket   SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  // Per-ticket ordering + history cursor. Unique per ticket.
+  seq Int
+
+  direction  SupportMessageDirection
+  systemKind SupportSystemKind?      @map("system_kind")
+
+  /// Support's automatic replies — today `agent_greeting` / `agent_farewell`.
+  ///
+  /// A plain nullable COLUMN rather than two more `SupportSystemKind` values,
+  /// and that is a deployment decision, not a modelling preference. Support is
+  /// released blue/green, so an old container serves traffic while the new one
+  /// writes: a Prisma client THROWS on an enum value it was not generated with
+  /// (verified, not assumed), which would break live conversations for the
+  /// duration of the cutover. An unknown column is invisible to it — Prisma
+  /// selects columns explicitly — so this shape rolls out with no window at all.
+  ///
+  /// Carries a CODE and never text: the wording is resolved by the client in
+  /// the language the user is reading right now.
+  autoKind String? @map("auto_kind") @db.VarChar(32)
+
+  text String?
+
+  // Author for OUT messages. Null for IN/SYSTEM, and null for an OUT message
+  // whose Telegram sender has no SupportAgent row yet (renders as the generic
+  // support identity rather than leaking a Telegram @username).
+  agentId String?       @map("agent_id") @db.Uuid
+  agent   SupportAgent? @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  // Telegram message_id inside the ticket topic. Set for both directions:
+  // IN so an edit made on the platform could be mirrored, OUT so an edit made
+  // in Telegram can be matched back to this row.
+  tgMessageId Int? @map("tg_message_id")
+
+  // Idempotency key for inbound relays. For Telegram it is
+  // `tg:<chatId>:<messageId>`; for the browser it is the client-supplied
+  // request id. Unique (NULLs distinct in Postgres), so a redelivered webhook
+  // update or a double-tapped send collapses into one row instead of a
+  // duplicate bubble.
+  dedupeKey String? @unique @map("dedupe_key")
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  editedAt  DateTime? @map("edited_at") @db.Timestamptz()
+  // Soft delete: Telegram deletions and moderation hide the bubble without
+  // punching a hole in the seq sequence.
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz()
+
+  attachments SupportAttachment[]
+
+  @@unique([ticketId, seq])
+  @@index([ticketId, createdAt])
+  @@map("support_messages")
+}
+
+// A support operator, managed entirely from inside the bot (/me, /setname,
+// /setavatar). Identity shown to users is deliberately decoupled from the
+// Telegram account: users never see a @username or a real first/last name.
+model SupportAgent {
+  id       String @id @default(uuid()) @db.Uuid
+  tgUserId BigInt @unique @map("tg_user_id")
+
+  operatorActions OperatorAction[]
+
+  displayName String  @map("display_name") @db.VarChar(64)
+  // Stored file name inside the shared support-files directory (served by
+  // exchange, so it resolves on every mirror). Null = default avatar.
+  avatarPath  String? @map("avatar_path") @db.VarChar(255)
+  // Optional subtitle, e.g. "Отдел выплат".
+  title       String? @db.VarChar(64)
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  messages SupportMessage[]
+
+  @@map("support_agents")
+}
+
+// A file on either side of the conversation. Bytes live on the shared
+// support-files volume; this row is the metadata + access-control record.
+model SupportAttachment {
+  id       String        @id @default(uuid()) @db.Uuid
+  ticketId String        @map("ticket_id") @db.Uuid
+  ticket   SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  // Null while the upload is staged (user picked a file but has not sent the
+  // message yet). The send endpoint binds staged rows to the created message.
+  messageId String?         @map("message_id") @db.Uuid
+  message   SupportMessage? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  kind SupportAttachmentKind
+
+  /// A Telegram sticker. Stored as `kind = IMAGE` (it is a .webp and must stay
+  /// inline media so the static mount can serve it); this flag is what makes
+  /// the client draw it bare — no frame, no lightbox, sticker-sized.
+  ///
+  /// A column, not a fifth `SupportAttachmentKind`, for the same blue/green
+  /// reason as `SupportMessage.autoKind` above.
+  isSticker Boolean @default(false) @map("is_sticker")
+
+  // Path relative to SUPPORT_FILES_DIR, e.g. "media/<ticketId>/<uuid>.webp".
+  // The first segment is the access class, not decoration: `media/` is the one
+  // subtree exchange publishes with express.static, `docs/` is never mounted.
+  storagePath String @map("storage_path") @db.VarChar(255)
+  // Original name as supplied, sanitized. Shown in the UI and used as the
+  // download filename; never used to build a filesystem path.
+  fileName    String @map("file_name") @db.VarChar(255)
+  mimeType    String @map("mime_type") @db.VarChar(128)
+  sizeBytes   Int    @map("size_bytes")
+
+  width  Int?
+  height Int?
+
+  // Telegram file_id of the copy living in the topic — lets the bot re-send a
+  // file without re-uploading bytes.
+  tgFileId String? @map("tg_file_id") @db.VarChar(255)
+
+  uploadedByAgent Boolean @default(false) @map("uploaded_by_agent")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  // Bytes deleted from disk by the retention sweeper. The ROW stays: the chat
+  // must still show that a file was sent (and its name), and Telegram keeps its
+  // own copy forever, so support loses nothing. Non-null = the browser renders
+  // a "file removed" placeholder instead of a broken image.
+  purgedAt DateTime? @map("purged_at") @db.Timestamptz()
+
+  @@index([ticketId, createdAt])
+  @@index([messageId])
+  // Drives the retention sweep: "not yet purged, older than N days". Partial so
+  // the index only holds the rows the sweeper can still act on — it shrinks
+  // back to nothing as files age out, instead of growing with the archive.
+  @@index([createdAt], map: "support_attachments_retention_idx")
+  @@map("support_attachments")
+}
+
+// ─── Operator tools bot ──────────────────────────────────────────────────
+// Audit trail for the internal operator-tools bot (separate bot token from
+// the ticket-bridge bot above). Every action an operator performs through
+// the bot lands here: who (Telegram id — stable, unlike @username), what,
+// with which parameters, and how it ended. Rows are append-only.
+
+model OperatorAction {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  // Telegram numeric user id of the operator. BigInt because Telegram ids
+  // already exceed 2^31 for newer accounts.
+  tgUserId BigInt @map("tg_user_id")
+
+  // First name + @username at the time of the action — display only, the
+  // id above is the identity.
+  tgName String @map("tg_name") @db.VarChar(128)
+
+  // The operator as the support system knows them, when they are registered.
+  // The Telegram id above stays the identity of record — an action taken by
+  // somebody who never ran /setname must still be attributable — but a linked
+  // agent is what lets the audit join the rest of the support data instead of
+  // being a table of loose names.
+  agentId String?       @map("agent_id") @db.Uuid
+  agent   SupportAgent? @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  // The ticket the action was taken from. Every one of these commands is typed
+  // inside a ticket topic, so without it an audit row cannot be read back
+  // against the conversation that prompted it.
+  ticketId String?        @map("ticket_id") @db.Uuid
+  ticket   SupportTicket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+
+  // Machine-readable action slug: 'partner_bind', 'account_delete'.
+  action String @db.VarChar(64)
+
+  // Free-form parameters of the request (search query, target user, etc).
+  params Json?
+
+  // 'ok' | 'refused' | 'error' — how the action ended.
+  result String? @db.VarChar(32)
+
+  @@index([tgUserId, createdAt])
+  @@index([action, createdAt])
+  @@index([ticketId, createdAt])
+  @@map("operator_actions")
+}

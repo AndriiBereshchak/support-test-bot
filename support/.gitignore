@@ -1,0 +1,14 @@
+/dist
+/node_modules
+/coverage
+/logs
+/.tmp
+/storage
+/prisma/generated
+
+package-lock.json
+yarn-error.log
+.idea/
+.DS_Store
+.env
+.env.test
