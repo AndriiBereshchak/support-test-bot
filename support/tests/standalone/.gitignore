@@ -1,0 +1,4 @@
+/node_modules/
+/.generated/
+/.vite/
+!package-lock.json

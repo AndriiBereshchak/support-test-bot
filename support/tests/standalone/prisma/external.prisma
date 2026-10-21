@@ -1,0 +1,173 @@
+// Synthetic TEST contract inferred from support reads and existing fixtures.
+// This is NOT an export of the exchange/affiliate schemas. Never deploy it.
+generator client {
+  provider = "prisma-client-js"
+  output   = "../.generated/external"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_SUPPORT")
+}
+
+enum AccountType {
+  DEMO
+  MEMBER
+  STANDARD
+  PRO
+  EXPERT
+  DIAMOND
+}
+
+enum KYCLevel {
+  NO_DATA
+  AI_REVIEW
+  MANUAL_REVIEW
+  INCOME_PROOF
+}
+
+enum RiskPriority {
+  GREEN
+  NORMAL
+  PURPLE
+  LOW
+}
+
+enum PaymentType {
+  DEPOSIT
+  WITHDRAWAL
+}
+
+enum PaymentStatus {
+  PENDING
+  PENDING_CRYPTO
+  PENDING_ADMIN_REVIEW
+  PROCESSING
+  COMPLETED
+  CANCELLED
+  WITHDRAWAL_RETRY_POOL
+  WITHDRAWAL_CHECK_COMPLETENESS_POOL
+  FAILED
+  PENDING_REFUND
+}
+
+enum AccountKind {
+  USER
+  PLATFORM
+}
+
+model User {
+  id                      String        @id @default(uuid())
+  nId                     Int           @unique @map("n_id")
+  email                   String        @db.VarChar(255)
+  fullName                String        @default("") @map("full_name") @db.VarChar(255)
+  countryCode             String        @default("UA") @map("country_code")
+  lang                    String        @default("en")
+  createdAt               DateTime      @default(now()) @map("created_at")
+  updatedAt               DateTime      @default(now()) @updatedAt @map("updated_at")
+  lastLoggedIn            DateTime?     @map("last_logged_in")
+  kycLevel                KYCLevel      @default(NO_DATA) @map("kyc_level")
+  accountType             AccountType   @default(DEMO) @map("account_type")
+  blockedUpTo             DateTime?     @map("blocked_up_to")
+  isBlockedForever        Boolean       @default(false) @map("is_blocked_forever")
+  firstDepositAt          DateTime?     @map("first_deposit_at")
+  riskPriority            RiskPriority? @map("risk_priority")
+  riskFlags               Json?         @map("risk_flags")
+  partnerId               Int?          @map("partner_id")
+  supportVipAt            DateTime?     @map("support_vip_at")
+  isDelete                Boolean       @default(false) @map("is_delete")
+  partnerCompanyCodeId    Int?          @map("partner_company_code_id")
+  partnerLinkedManuallyAt DateTime?     @map("partner_linked_manually_at")
+
+  @@map("users")
+}
+
+model Account {
+  id        String      @id @default(uuid())
+  userId    String?     @map("user_id")
+  kind      AccountKind @default(USER)
+  isDemo    Boolean     @default(false) @map("is_demo")
+  available Decimal     @default(0) @db.Decimal(30, 8)
+
+  @@map("accounts")
+}
+
+model Payment {
+  id                String        @id @default(uuid())
+  userId            String        @map("user_id")
+  txId              String?       @map("tx_id")
+  type              PaymentType
+  status            PaymentStatus @default(PENDING)
+  amount            Decimal       @default(0) @db.Decimal(30, 8)
+  toUSDT            Decimal       @default(0) @map("to_usdt") @db.Decimal(30, 8)
+  isFake            Boolean       @default(false) @map("is_fake")
+  sourceTxHash      String?       @map("source_tx_hash")
+  destinationTxHash String?       @map("destination_tx_hash")
+  withdrawAddress   String?       @map("withdraw_address")
+  withdrawNetwork   String?       @map("withdraw_network")
+  additionalData    Json?         @map("additional_data")
+  createdAt         DateTime      @default(now()) @map("created_at")
+
+  @@map("payments")
+}
+
+model Trade {
+  id     String  @id @default(uuid())
+  userId String  @map("user_id")
+  isDemo Boolean @default(false) @map("is_demo")
+
+  @@map("trades")
+}
+
+model Position {
+  id     String  @id @default(uuid())
+  userId String  @map("user_id")
+  isDemo Boolean @default(false) @map("is_demo")
+
+  @@map("positions")
+}
+
+model PredictOrder {
+  id     String  @id @default(uuid())
+  userId String  @map("user_id")
+  isDemo Boolean @default(false) @map("is_demo")
+
+  @@map("predict_orders")
+}
+
+model Partner {
+  id                Int                 @id @default(autoincrement())
+  email             String              @unique
+  password          String
+  nick              String?
+  isBlocked         Boolean             @default(false) @map("is_blocked")
+  userAffiliateCode String?             @map("user_affiliate_code")
+  affiliateCode     String?             @map("affiliate_code")
+  mobileCode        String?             @map("mobile_code")
+  companyCodes      CompanyCode[]
+  regionCodes       PartnerRegionCode[]
+
+  @@map("partners")
+}
+
+model CompanyCode {
+  id        Int     @id @default(autoincrement())
+  partnerId Int     @map("partner_id")
+  partner   Partner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  name      String
+  code      String
+
+  @@map("company_codes")
+}
+
+model PartnerRegionCode {
+  id          Int     @id @default(autoincrement())
+  partnerId   Int     @map("partner_id")
+  partner     Partner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  region      String
+  partnerCode String  @map("partner_code")
+  userCode    String  @map("user_code")
+  mobileCode  String  @map("mobile_code")
+
+  @@map("partner_region_codes")
+}

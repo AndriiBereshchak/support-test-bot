@@ -1,0 +1,45 @@
+{
+  "name": "support-export-test-environment",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Test-only tools for the support export; never a production workspace",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "prepare": "node run.mjs generate",
+    "generate": "node run.mjs generate",
+    "typecheck": "node run.mjs typecheck",
+    "test": "node run.mjs unit",
+    "test:integration": "node run.mjs integration",
+    "test:all": "node run.mjs all",
+    "infra:up": "node run.mjs infra",
+    "db:prepare": "node run.mjs database",
+    "format": "prettier --check . --ignore-path .gitignore"
+  },
+  "dependencies": {
+    "@fastify/multipart": "^10.1.0",
+    "@grpc/grpc-js": "^1.12.2",
+    "@grpc/proto-loader": "^0.7.13",
+    "@prisma/client": "^6.15.0",
+    "@sentry/node": "^9.35.0",
+    "dotenv": "^17.0.1",
+    "fastify": "^5.10.0",
+    "grammy": "^1.45.1",
+    "ioredis": "^5.3.2",
+    "module-alias": "^2.2.2",
+    "nats": "^2.29.0",
+    "prisma": "^6.15.0",
+    "prom-client": "^15.1.3",
+    "sharp": "^0.34.2",
+    "winston": "^3.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.10",
+    "npm-run-all": "^4.1.5",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.8.3",
+    "vitest": "^1.6.0",
+    "prettier": "3.6.2"
+  }
+}
