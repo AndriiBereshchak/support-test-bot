@@ -7,11 +7,18 @@ import { logger } from '@config/logger'
 
 import {
   generateZhoraText,
+  getZhoraModel,
+  getOpenRouterGenerationCost,
   OpenRouterError,
   type OpenRouterInput,
   type OpenRouterMetadata,
   type OpenRouterResult,
 } from './openrouter'
+import {
+  assertZhoraBudget,
+  refreshZhoraBudget,
+  ZhoraBudgetError,
+} from './budget.service'
 
 interface CallContext {
   ticketId?: string | null
@@ -30,14 +37,14 @@ function temporaryDatabaseError(error: unknown): boolean {
 }
 
 async function recordCall(
+  call: { id: string; createdAt: Date },
   operation: OpenRouterInput['operation'],
   context: CallContext,
   metadata: OpenRouterMetadata,
   outcome: string
 ): Promise<void> {
   const data = {
-    id: randomUUID(),
-    createdAt: new Date(),
+    ...call,
     operation,
     ticketId: context.ticketId ?? null,
     agentId: context.agentId ?? null,
@@ -51,12 +58,12 @@ async function recordCall(
   const retryDelays = [100, 300]
   for (let attempt = 0; ; attempt++) {
     try {
-      // The previous write may have committed even if its acknowledgement
-      // was lost. Reuse the ID so retrying cannot duplicate the charge.
+      // Finish the pending record. Reuse its ID even if an acknowledgement
+      // is lost; recomputed budget totals cannot double-count the retry.
       await prismaSupport.zhoraLlmCall.upsert({
         where: { id: data.id },
         create: data,
-        update: {},
+        update: data,
       })
       return
     } catch (error) {
@@ -75,23 +82,66 @@ async function recordCall(
   }
 }
 
-/** Application entry point for text calls with usage auditing.
+async function completeCall(
+  call: { id: string; createdAt: Date },
+  input: OpenRouterInput,
+  context: CallContext,
+  metadata: OpenRouterMetadata,
+  outcome: string
+): Promise<void> {
+  if (metadata.usage.costUsd === null && metadata.generationId) {
+    try {
+      metadata.usage.costUsd = await getOpenRouterGenerationCost(
+        metadata.generationId
+      )
+    } catch {
+      // Keep unknown cost null; the next admission must reconcile key usage.
+      logger.warn('[zhora] generation cost is unavailable')
+    }
+  }
+  await recordCall(call, input.operation, context, metadata, outcome)
+  try {
+    await refreshZhoraBudget(call.createdAt)
+  } catch {
+    // A ready paid result is still returned. The durable pending/unknown
+    // journal row makes the next admission reconcile or refuse a new call.
+    logger.warn('[zhora] budget refresh failed after generation')
+  }
+}
+
+/** Application entry point for budget-checked, audited text generation.
  * Retries only journal writes; never repeats the paid generation. */
 export async function generateZhoraTextWithJournal(
   input: OpenRouterInput,
   context: CallContext = {}
 ): Promise<OpenRouterResult> {
+  const model = getZhoraModel(input)
+  await assertZhoraBudget()
+  const call = { id: randomUUID(), createdAt: new Date() }
+  try {
+    // A durable pending row survives a process crash or failed final write.
+    // It is not a monetary reservation and does not serialize AI requests.
+    await prismaSupport.zhoraLlmCall.create({
+      data: {
+        ...call,
+        operation: input.operation,
+        model,
+        ticketId: context.ticketId ?? null,
+        agentId: context.agentId ?? null,
+      },
+    })
+  } catch {
+    throw new ZhoraBudgetError('budget_unavailable')
+  }
   let result: OpenRouterResult
   try {
     result = await generateZhoraText(input)
   } catch (error) {
-    // Errors without transport metadata are local refusals (disabled,
-    // invalid input or missing configuration), not provider calls.
     if (error instanceof OpenRouterError && error.details) {
-      await recordCall(input.operation, context, error.details, error.code)
+      await completeCall(call, input, context, error.details, error.code)
     }
     throw error
   }
-  await recordCall(input.operation, context, result, 'ok')
+  await completeCall(call, input, context, result, 'ok')
   return result
 }

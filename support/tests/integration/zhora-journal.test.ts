@@ -5,12 +5,22 @@ import { Prisma } from '@prisma-support'
 vi.mock('@apps/services/zhora/openrouter', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@apps/services/zhora/openrouter')>()),
   generateZhoraText: vi.fn(),
+  getZhoraModel: vi.fn(() => 'test/reply'),
+}))
+// This suite isolates journal retries; budget behavior has its own suite.
+vi.mock('@apps/services/zhora/budget.service', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('@apps/services/zhora/budget.service')
+  >()),
+  assertZhoraBudget: vi.fn(async () => undefined),
+  refreshZhoraBudget: vi.fn(async () => undefined),
 }))
 
 import { prismaSupport } from '@config/database'
 import { logger } from '@config/logger'
 import {
   generateZhoraText,
+  getZhoraModel,
   OpenRouterError,
   type OpenRouterResult,
 } from '@apps/services/zhora/openrouter'
@@ -99,7 +109,11 @@ describe('Zhora call journal', () => {
   ] as const)(
     'records %s and preserves the original error and known cost',
     async (code, usage) => {
-      const error = new OpenRouterError(code, { ...result, usage })
+      const error = new OpenRouterError(code, {
+        ...result,
+        generationId: code === 'timeout' ? null : result.generationId,
+        usage,
+      })
       generate.mockRejectedValue(error)
       await expect(
         generateZhoraTextWithJournal(prompt, { ticketId })
@@ -172,7 +186,9 @@ describe('Zhora call journal', () => {
   })
 
   it('does not create provider-call records for local refusals', async () => {
-    generate.mockRejectedValue(new OpenRouterError('disabled'))
+    vi.mocked(getZhoraModel).mockImplementationOnce(() => {
+      throw new OpenRouterError('disabled')
+    })
     await expect(
       generateZhoraTextWithJournal(prompt, { ticketId })
     ).rejects.toMatchObject({ code: 'disabled' })

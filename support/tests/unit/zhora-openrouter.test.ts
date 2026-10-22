@@ -32,6 +32,8 @@ vi.mock('@config/env', async (importOriginal) => ({
 
 import {
   generateZhoraText,
+  getOpenRouterMonthlyUsage,
+  getOpenRouterGenerationCost,
   OpenRouterError,
 } from '@apps/services/zhora/openrouter'
 
@@ -228,5 +230,52 @@ describe('OpenRouter text client', () => {
     await expect(generateZhoraText(prompt)).rejects.toMatchObject({
       code: 'invalid_response',
     })
+  })
+
+  it('reads dedicated-key monthly spending without generating text', async () => {
+    request.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: { usage_monthly: 12.5, limit: null },
+        })
+      )
+    )
+    expect(await getOpenRouterMonthlyUsage()).toEqual({
+      month: new Date().toISOString().slice(0, 7),
+      costUsd: 12.5,
+    })
+    expect(request.mock.calls[0]![0]).toBe('https://openrouter.ai/api/v1/key')
+    expect(request.mock.calls[0]![1]!.body).toBeUndefined()
+  })
+
+  it('accepts a confirmed zero cost for the requested generation', async () => {
+    request.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: { id: 'gen-test', total_cost: 0 },
+        })
+      )
+    )
+    expect(await getOpenRouterGenerationCost('gen-test')).toBe(0)
+    expect(request.mock.calls[0]![0]).toBe(
+      'https://openrouter.ai/api/v1/generation?id=gen-test'
+    )
+  })
+
+  it('rejects missing monthly usage and metadata for another generation', async () => {
+    request.mockResolvedValueOnce(new Response(JSON.stringify({ data: {} })))
+    await expect(getOpenRouterMonthlyUsage()).rejects.toMatchObject({
+      code: 'accounting_unavailable',
+    })
+    request.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          data: { id: 'gen-other', total_cost: 0.1 },
+        })
+      )
+    )
+    await expect(getOpenRouterGenerationCost('gen-test')).rejects.toMatchObject(
+      { code: 'accounting_unavailable' }
+    )
   })
 })
