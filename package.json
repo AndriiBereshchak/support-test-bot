@@ -16,6 +16,7 @@
     "test:all": "node support/tests/standalone/run.mjs all",
     "infra:up": "node support/tests/standalone/run.mjs infra",
     "db:prepare": "node support/tests/standalone/run.mjs database",
+    "db:studio": "node support/tests/standalone/run.mjs studio",
     "dev": "node support/tests/standalone/run.mjs dev",
     "dev:build": "node support/tests/standalone/run.mjs dev-build",
     "dev:seed": "node support/tests/standalone/run.mjs dev-seed",

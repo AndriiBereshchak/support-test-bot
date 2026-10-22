@@ -230,6 +230,15 @@ async function main() {
       return infra()
     case 'database':
       return database()
+    case 'studio':
+      return prisma([
+        'studio',
+        '--schema',
+        path.join(support, 'prisma/schema.prisma'),
+        '--hostname',
+        '127.0.0.1',
+        ...process.argv.slice(3),
+      ])
     case 'integration':
       infra()
       await database()
