@@ -42,12 +42,14 @@ const { prismaSupport, shutdownPrisma } = require('@config/database')
 const { closeRedis } = require('@config/redis')
 const { closeNats, getNatsConnection } = require('@config/nats')
 const { startInactivitySweeper } = require('@apps/services/sweeper.service')
+const { startZhoraWorker } = require('@apps/services/zhora/job.service')
 const telegram = require('@telegram/api')
 const { handleUpdate } = require('@telegram/updates')
 const { upsertAgent } = require('@apps/services/agent.service')
 
 const app = buildApp()
 let stopWorker
+let stopZhoraWorker
 let stopping = false
 let nextMessage = randomInt(1_100_000_000, 2_000_000_000)
 
@@ -133,8 +135,10 @@ async function close(code = 0) {
   const deadline = setTimeout(() => process.exit(1), 8000)
   deadline.unref()
   stopWorker?.()
+  const zhoraStopped = stopZhoraWorker?.()
   try {
     await app.close()
+    await zhoraStopped
     await closeNats()
     await closeRedis()
     await shutdownPrisma()
@@ -165,8 +169,10 @@ try {
   // Loopback only. Use a tunnel explicitly for a dedicated test Telegram bot.
   await app.listen({ host: '127.0.0.1', port: Number(env.APP_PORT) })
   if (realTelegram) await telegram.registerWebhook()
-  if (env.STANDALONE_WORKER_ENABLED === 'true')
+  if (env.STANDALONE_WORKER_ENABLED === 'true') {
     stopWorker = startInactivitySweeper()
+    stopZhoraWorker = startZhoraWorker()
+  }
   console.log(`Standalone support: http://127.0.0.1:${env.APP_PORT}`)
   console.log(
     `Telegram: ${realTelegram ? 'dedicated test bot' : 'offline; inspect /__dev/events'}`
@@ -175,7 +181,7 @@ try {
     'Synthetic users: GET /__dev/fixtures (x-internal-token required).'
   )
   console.log(
-    'Local database: support_test. OpenRouter/Zhora is not implemented yet.'
+    'Local database: support_test. Zhora Telegram commands are not connected yet.'
   )
 } catch (error) {
   console.error(`Standalone server failed: ${error.message}`)

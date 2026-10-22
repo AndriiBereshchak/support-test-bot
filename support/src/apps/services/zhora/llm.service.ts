@@ -24,9 +24,11 @@ interface CallContext {
   ticketId?: string | null
   /** SupportAgent.id, not the operator's Telegram user ID. */
   agentId?: string | null
+  /** Only the job worker supplies this; attach before starting paid work. */
+  jobId?: string
 }
 
-function temporaryDatabaseError(error: unknown): boolean {
+export function temporaryDatabaseError(error: unknown): boolean {
   const code =
     error instanceof Prisma.PrismaClientKnownRequestError
       ? error.code
@@ -128,6 +130,15 @@ export async function generateZhoraTextWithJournal(
         model,
         ticketId: context.ticketId ?? null,
         agentId: context.agentId ?? null,
+        job: context.jobId
+          ? {
+              connect: {
+                id: context.jobId,
+                status: 'running',
+                leaseExpiresAt: { gt: new Date() },
+              },
+            }
+          : undefined,
       },
     })
   } catch {

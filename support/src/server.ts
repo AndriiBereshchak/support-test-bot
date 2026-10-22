@@ -23,6 +23,7 @@ import { startMetricsServer } from '@config/metrics'
 import { closeRedis } from '@config/redis'
 
 import { startInactivitySweeper } from '@apps/services/sweeper.service'
+import { startZhoraWorker } from '@apps/services/zhora/job.service'
 
 import { registerWebhook } from '@telegram/api'
 
@@ -36,6 +37,7 @@ const SHUTDOWN_TIMEOUT_MS = 8000
 let app: FastifyInstance | undefined
 let metricsServer: Server | undefined
 let stopSweeper: (() => void) | undefined
+let stopZhoraWorker: (() => Promise<void>) | undefined
 let shuttingDown = false
 
 // ─── Global last-resort error handlers ───────────────────────────────
@@ -106,6 +108,7 @@ async function run(): Promise<void> {
 
   if (startWorker) {
     stopSweeper = startInactivitySweeper()
+    stopZhoraWorker = startZhoraWorker()
   }
 
   // One line for the whole boot: which role this replica took, and the port it
@@ -135,6 +138,7 @@ async function gracefulShutdown(code: number): Promise<void> {
 
   // Stop generating new work before tearing down what it depends on.
   stopSweeper?.()
+  const zhoraStopped = stopZhoraWorker?.()
 
   try {
     // Fastify's close stops accepting connections and waits for in-flight
@@ -145,6 +149,7 @@ async function gracefulShutdown(code: number): Promise<void> {
   }
 
   metricsServer?.close()
+  await zhoraStopped
 
   // NATS last among the transports: draining it flushes pushes queued by the
   // requests that just finished draining above.

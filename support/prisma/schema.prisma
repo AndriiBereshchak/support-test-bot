@@ -135,6 +135,7 @@ model SupportTicket {
 
   operatorActions OperatorAction[]
   zhoraCalls      ZhoraLlmCall[]
+  zhoraJobs       ZhoraJob[]
 
   // A topic now holds EVERY ticket of one user (see SupportUserThread), so the
   // old `@@unique([tgChatId, tgTopicId])` had to go: it is precisely the rule
@@ -287,6 +288,7 @@ model SupportAgent {
 
   operatorActions OperatorAction[]
   zhoraCalls      ZhoraLlmCall[]
+  zhoraJobs       ZhoraJob[]
 
   displayName String  @map("display_name") @db.VarChar(64)
   // Stored file name inside the shared support-files directory (served by
@@ -425,13 +427,14 @@ model ZhoraLlmCall {
   agentId  String?        @map("agent_id") @db.Uuid
   agent    SupportAgent?  @relation(fields: [agentId], references: [id], onDelete: SetNull)
 
-  inputTokens  Int?     @map("input_tokens")
-  outputTokens Int?     @map("output_tokens")
-  costUsd      Decimal? @map("cost_usd") @db.Decimal(24, 12)
-  durationMs   Int?     @map("duration_ms")
+  inputTokens  Int?      @map("input_tokens")
+  outputTokens Int?      @map("output_tokens")
+  costUsd      Decimal?  @map("cost_usd") @db.Decimal(24, 12)
+  durationMs   Int?      @map("duration_ms")
   // Nullable until completion. Outcome values are defined by the journal
   // service in its own block, not by adding values to existing enums.
-  outcome      String?  @db.VarChar(32)
+  outcome      String?   @db.VarChar(32)
+  job          ZhoraJob?
 
   @@index([createdAt])
   @@index([operation, createdAt])
@@ -448,4 +451,37 @@ model ZhoraMonthlyBudget {
   notifiedAt  DateTime? @map("notified_at") @db.Timestamptz()
 
   @@map("zhora_monthly_budgets")
+}
+
+// Durable execution state, separate from the usage audit. Input/result may
+// contain operator drafts; never include credentials or log these fields.
+model ZhoraJob {
+  id        String   @id @default(uuid()) @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+  // Stable source event + operation, supplied by the producer. A new command
+  // gets a new key; Telegram redelivery must reuse the original one.
+  eventKey  String   @unique @map("event_key") @db.VarChar(160)
+  operation String   @db.VarChar(32)
+  input     Json
+
+  ticketId String?        @map("ticket_id") @db.Uuid
+  ticket   SupportTicket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  agentId  String?        @map("agent_id") @db.Uuid
+  agent    SupportAgent?  @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  callId   String?        @unique @map("call_id") @db.Uuid
+  call     ZhoraLlmCall?  @relation(fields: [callId], references: [id], onDelete: SetNull)
+
+  // queued / running / completed / failed / uncertain. No changes to the
+  // existing support enums during blue/green deployment.
+  status         String    @default("queued") @db.VarChar(24)
+  startedAt      DateTime? @map("started_at") @db.Timestamptz()
+  finishedAt     DateTime? @map("finished_at") @db.Timestamptz()
+  leaseExpiresAt DateTime? @map("lease_expires_at") @db.Timestamptz()
+  result         Json?
+  errorCode      String?   @map("error_code") @db.VarChar(64)
+
+  @@index([status, createdAt])
+  @@index([status, leaseExpiresAt])
+  @@map("zhora_jobs")
 }
