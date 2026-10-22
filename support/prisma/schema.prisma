@@ -134,6 +134,7 @@ model SupportTicket {
   attachments SupportAttachment[]
 
   operatorActions OperatorAction[]
+  zhoraCalls      ZhoraLlmCall[]
 
   // A topic now holds EVERY ticket of one user (see SupportUserThread), so the
   // old `@@unique([tgChatId, tgTopicId])` had to go: it is precisely the rule
@@ -285,6 +286,7 @@ model SupportAgent {
   tgUserId BigInt @unique @map("tg_user_id")
 
   operatorActions OperatorAction[]
+  zhoraCalls      ZhoraLlmCall[]
 
   displayName String  @map("display_name") @db.VarChar(64)
   // Stored file name inside the shared support-files directory (served by
@@ -406,4 +408,44 @@ model OperatorAction {
   @@index([action, createdAt])
   @@index([ticketId, createdAt])
   @@map("operator_actions")
+}
+
+// Metadata only: prompts, customer text and API keys do not belong here.
+// NULL usage/cost means not reported, not a free request. Automatic operations
+// and KB operations may have no operator or ticket respectively.
+model ZhoraLlmCall {
+  id        String   @id @default(uuid()) @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  operation String @db.VarChar(32)
+  model     String @db.VarChar(160)
+
+  ticketId String?        @map("ticket_id") @db.Uuid
+  ticket   SupportTicket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  agentId  String?        @map("agent_id") @db.Uuid
+  agent    SupportAgent?  @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  inputTokens  Int?     @map("input_tokens")
+  outputTokens Int?     @map("output_tokens")
+  costUsd      Decimal? @map("cost_usd") @db.Decimal(24, 12)
+  durationMs   Int?     @map("duration_ms")
+  // Nullable until completion. Outcome values are defined by the journal
+  // service in its own block, not by adding values to existing enums.
+  outcome      String?  @db.VarChar(32)
+
+  @@index([createdAt])
+  @@index([operation, createdAt])
+  @@index([ticketId, createdAt])
+  @@map("zhora_llm_calls")
+}
+
+// Storage only. The budget service will define the month's timezone,
+// admission rules and recovery policy after product clarification.
+model ZhoraMonthlyBudget {
+  month       String    @id @db.VarChar(7)
+  spentUsd    Decimal   @default(0) @map("spent_usd") @db.Decimal(24, 12)
+  exhaustedAt DateTime? @map("exhausted_at") @db.Timestamptz()
+  notifiedAt  DateTime? @map("notified_at") @db.Timestamptz()
+
+  @@map("zhora_monthly_budgets")
 }
