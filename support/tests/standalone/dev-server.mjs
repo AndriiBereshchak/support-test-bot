@@ -35,6 +35,8 @@ if (!realTelegram) {
   )
 }
 
+const { assertRequiredEnv } = require('@config/env')
+assertRequiredEnv()
 const { buildApp } = require(path.join(source, 'app.js'))
 const { prismaSupport, shutdownPrisma } = require('@config/database')
 const { closeRedis } = require('@config/redis')

@@ -257,6 +257,61 @@ export const GRPC_EXCHANGE_SERVER =
 // clear message instead of failing.
 export const DATABASE_AFFILIATE = process.env.DATABASE_AFFILIATE ?? ''
 
+// ─── Zhora ───────────────────────────────────────────────────────────────
+// Unlike optional display settings, a misspelled AI flag or budget must not
+// silently enable paid calls or remove a spending limit. Never echo secrets.
+const zhoraEnabled = process.env.ZHORA_ENABLED?.trim() || 'false'
+if (zhoraEnabled !== 'true' && zhoraEnabled !== 'false') {
+  throw new Error('[support] ZHORA_ENABLED must be true or false')
+}
+export const ZHORA_ENABLED = zhoraEnabled === 'true'
+
+const zhoraNumberEnv = (key: string, fallback: number): number => {
+  const raw = process.env[key]?.trim()
+  if (!raw) return fallback
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`[support] ${key} must be a positive number`)
+  }
+  return value
+}
+
+export const ZHORA_OPENROUTER_API_KEY =
+  process.env.ZHORA_OPENROUTER_API_KEY?.trim() ?? ''
+
+// Explicit IDs, no model fallback: swapping a model must be a conscious
+// configuration change. These operations will be connected in later blocks.
+export const ZHORA_MODEL_TRANSLATE =
+  process.env.ZHORA_MODEL_TRANSLATE?.trim() ?? ''
+export const ZHORA_MODEL_REPLY = process.env.ZHORA_MODEL_REPLY?.trim() ?? ''
+export const ZHORA_MODEL_FIX = process.env.ZHORA_MODEL_FIX?.trim() ?? ''
+export const ZHORA_MODEL_BRIEF = process.env.ZHORA_MODEL_BRIEF?.trim() ?? ''
+export const ZHORA_MODEL_TAG = process.env.ZHORA_MODEL_TAG?.trim() ?? ''
+export const ZHORA_MODEL_CLUSTER = process.env.ZHORA_MODEL_CLUSTER?.trim() ?? ''
+export const ZHORA_MODEL_DRAFT = process.env.ZHORA_MODEL_DRAFT?.trim() ?? ''
+export const ZHORA_MODEL_EMBEDDING =
+  process.env.ZHORA_MODEL_EMBEDDING?.trim() ?? ''
+
+export const ZHORA_MONTHLY_BUDGET_USD = zhoraNumberEnv(
+  'ZHORA_MONTHLY_BUDGET_USD',
+  300
+)
+// Initial transport/generation defaults, not product requirements. Validate
+// them against the selected model when implementing the OpenRouter client.
+export const ZHORA_TIMEOUT_MS = zhoraNumberEnv('ZHORA_TIMEOUT_MS', 30_000)
+// Node.js timers cannot represent a delay above this limit correctly.
+if (!Number.isInteger(ZHORA_TIMEOUT_MS) || ZHORA_TIMEOUT_MS > 2_147_483_647) {
+  throw new Error('[support] ZHORA_TIMEOUT_MS must be an integer <= 2147483647')
+}
+
+export const ZHORA_MAX_OUTPUT_TOKENS = zhoraNumberEnv(
+  'ZHORA_MAX_OUTPUT_TOKENS',
+  2048
+)
+if (!Number.isSafeInteger(ZHORA_MAX_OUTPUT_TOKENS)) {
+  throw new Error('[support] ZHORA_MAX_OUTPUT_TOKENS must be a safe integer')
+}
+
 /**
  * Fail fast on a misconfigured deploy. Only checks what has no safe default
  * and would otherwise surface as a confusing runtime error much later (a
@@ -267,6 +322,22 @@ export const DATABASE_AFFILIATE = process.env.DATABASE_AFFILIATE ?? ''
 export function assertRequiredEnv(): void {
   const missing: string[] = []
   if (!DATABASE_SUPPORT) missing.push('DATABASE_SUPPORT')
+  if (ZHORA_ENABLED) {
+    const required = {
+      ZHORA_OPENROUTER_API_KEY,
+      ZHORA_MODEL_TRANSLATE,
+      ZHORA_MODEL_REPLY,
+      ZHORA_MODEL_FIX,
+      ZHORA_MODEL_BRIEF,
+      ZHORA_MODEL_TAG,
+      ZHORA_MODEL_CLUSTER,
+      ZHORA_MODEL_DRAFT,
+      ZHORA_MODEL_EMBEDDING,
+    }
+    for (const [key, value] of Object.entries(required)) {
+      if (!value) missing.push(key)
+    }
+  }
   if (NODE_ENV === 'production') {
     if (!INTERNAL_TOKEN) missing.push('SUPPORT_INTERNAL_TOKEN')
     if (!TELEGRAM_BOT_TOKEN) missing.push('SUPPORT_BOT_TOKEN')
