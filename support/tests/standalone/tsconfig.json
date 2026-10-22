@@ -4,7 +4,6 @@
     "baseUrl": ".",
     "allowJs": true,
     "types": ["node"],
-    "typeRoots": ["./node_modules/@types"],
     "paths": {
       "@apps/*": ["../../src/apps/*"],
       "@core/*": ["../../src/core/*"],
@@ -14,10 +13,9 @@
       "@prisma-exchange": ["./.generated/external"],
       "@prisma-affiliate": ["./.generated/external"],
       "@binodex/shared": ["./adapters/shared.ts"],
-      "grammy/types": ["./node_modules/grammy/out/types.d.ts"],
-      "*": ["./node_modules/*"]
+      "grammy/types": ["../../../node_modules/grammy/out/types.d.ts"]
     }
   },
-  "include": ["../../src/**/*.ts", "../**/*.ts", "./environment.mjs"],
-  "exclude": ["./node_modules", "./.generated"]
+  "include": ["../../src/**/*.ts", "../**/*.ts", "./load-env.mjs"],
+  "exclude": ["./.generated"]
 }

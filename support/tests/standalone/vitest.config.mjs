@@ -1,12 +1,9 @@
 import path from 'node:path'
-import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
-import { testEnvironment } from './environment.mjs'
+import { testEnvironment } from './load-env.mjs'
 
 const directory = path.dirname(fileURLToPath(import.meta.url))
-const require = createRequire(import.meta.url)
-const manifest = require('./package.json')
 const unitOnly = process.env.SUPPORT_STANDALONE_SUITE === 'unit'
 
 export default defineConfig({
@@ -40,18 +37,6 @@ export default defineConfig({
         find: '@binodex/shared',
         replacement: path.join(directory, 'adapters/shared.ts'),
       },
-      ...Object.keys({ ...manifest.dependencies, vitest: '' })
-        .filter((name) => name !== 'prisma')
-        .map((name) => ({
-          find: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`),
-          replacement:
-            name === 'vitest'
-              ? path.join(
-                  path.dirname(require.resolve('vitest/package.json')),
-                  'dist/index.js'
-                )
-              : require.resolve(name),
-        })),
     ],
   },
   test: {

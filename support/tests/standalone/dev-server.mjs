@@ -2,7 +2,7 @@ import path from 'node:path'
 import { randomInt } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { developmentEnvironment } from './dev-environment.mjs'
+import { developmentEnvironment } from './load-env.mjs'
 import { developmentUsers, seedDevelopmentData } from './dev-fixtures.mjs'
 
 const directory = path.dirname(fileURLToPath(import.meta.url))

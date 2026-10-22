@@ -1,5 +1,5 @@
 import { afterAll, vi } from 'vitest'
-import { testEnvironment } from './environment.mjs'
+import { testEnvironment } from './load-env.mjs'
 
 Object.assign(process.env, testEnvironment())
 

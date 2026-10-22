@@ -3,8 +3,7 @@ import { createRequire } from 'node:module'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { testEnvironment } from './environment.mjs'
-import { developmentEnvironment } from './dev-environment.mjs'
+import { testEnvironment, developmentEnvironment } from './load-env.mjs'
 
 const directory = path.dirname(fileURLToPath(import.meta.url))
 const support = path.resolve(directory, '../..')
@@ -22,7 +21,7 @@ if (major < 22 || (major === 22 && minor < 18)) {
 function execute(binary, args, options = {}) {
   return execFileSync(binary, args, {
     cwd: support,
-    env: testEnvironment(),
+    env: options.env ?? testEnvironment(),
     stdio: 'inherit',
     ...options,
   })
@@ -84,27 +83,35 @@ function infra() {
   ])
 }
 
-async function database() {
+async function database(env = testEnvironment()) {
   // Do not migrate an arbitrary service that happens to answer on this port.
-  execute('docker', [
-    'exec',
-    'binodex-test-pg-support',
-    'pg_isready',
-    '-U',
-    'test',
-    '-d',
-    'support_test',
-  ])
-  prisma([
-    'migrate',
-    'deploy',
-    '--schema',
-    path.join(support, 'prisma/schema.prisma'),
-  ])
+  const url = new URL(env.DATABASE_SUPPORT)
+  execute(
+    'docker',
+    [
+      'exec',
+      'binodex-test-pg-support',
+      'pg_isready',
+      '-U',
+      decodeURIComponent(url.username),
+      '-d',
+      url.pathname.slice(1),
+    ],
+    { env }
+  )
+  prisma(
+    [
+      'migrate',
+      'deploy',
+      '--schema',
+      path.join(support, 'prisma/schema.prisma'),
+    ],
+    { env }
+  )
 
   const { PrismaClient } = require('./.generated/external')
   const client = new PrismaClient({
-    datasources: { db: { url: testEnvironment().DATABASE_SUPPORT } },
+    datasources: { db: { url: env.DATABASE_SUPPORT } },
   })
   try {
     const existing = await client.$queryRawUnsafe(
@@ -128,18 +135,21 @@ async function database() {
           path.join(directory, 'prisma/external.prisma'),
           '--script',
         ],
-        { stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' }
+        { env, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' }
       )
       const sqlPath = path.join(generated, 'external.sql')
       writeFileSync(sqlPath, sql)
-      prisma([
-        'db',
-        'execute',
-        '--schema',
-        path.join(directory, 'prisma/external.prisma'),
-        '--file',
-        sqlPath,
-      ])
+      prisma(
+        [
+          'db',
+          'execute',
+          '--schema',
+          path.join(directory, 'prisma/external.prisma'),
+          '--file',
+          sqlPath,
+        ],
+        { env }
+      )
     }
     // Existence alone is not enough: detect old/incompatible fixture tables.
     await client.user.findFirst()
@@ -178,18 +188,17 @@ async function main() {
     case 'dev-build':
       return buildDevelopmentServer()
     case 'dev-seed': {
-      developmentEnvironment()
-      await database()
+      const env = developmentEnvironment()
+      await database(env)
       const { seedDevelopmentData } = await import('./dev-fixtures.mjs')
-      // The seed command uses the same fixed database as the test runner.
-      Object.assign(process.env, testEnvironment())
+      Object.assign(process.env, env)
       console.log(await seedDevelopmentData())
       return
     }
     case 'dev-reset': {
-      developmentEnvironment()
-      await database()
-      Object.assign(process.env, testEnvironment())
+      const env = developmentEnvironment()
+      await database(env)
+      Object.assign(process.env, env)
       const { resetDevelopmentData, seedDevelopmentData } = await import(
         './dev-fixtures.mjs'
       )
@@ -203,7 +212,7 @@ async function main() {
     case 'dev': {
       const env = developmentEnvironment()
       infra()
-      await database()
+      await database(env)
       buildDevelopmentServer()
       return execute(
         process.execPath,

@@ -7,5 +7,5 @@
     "noEmit": false
   },
   "include": ["../../src/**/*.ts", "./adapters/shared.ts", "./dev/**/*.ts"],
-  "exclude": ["./node_modules", "./.generated"]
+  "exclude": ["./.generated"]
 }

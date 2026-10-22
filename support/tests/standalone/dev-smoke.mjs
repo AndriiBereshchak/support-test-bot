@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { developmentEnvironment } from './dev-environment.mjs'
+import { developmentEnvironment } from './load-env.mjs'
 
 const env = developmentEnvironment()
 if (env.STANDALONE_REAL_TELEGRAM === 'true') {
