@@ -11,10 +11,7 @@ import { ApiError } from '@core/errors/api-error'
 import { healthRoutes } from '@apps/routes/health.routes'
 import { internalRoutes } from '@apps/routes/internal.routes'
 import { telegramRoutes } from '@apps/routes/telegram.routes'
-import {
-  zhoraKbRoutes,
-  type ZhoraKbRouteOptions,
-} from '@apps/routes/zhora-kb.routes'
+import { zhoraKbRoutes } from '@apps/routes/zhora-kb.routes'
 
 /**
  * The monorepo's first Fastify service — everything else is Express 5, so none
@@ -24,9 +21,7 @@ import {
  * and the Telegram webhook to it), which is why there is no CORS, no helmet and
  * no rate limiter here: those live one hop up, on the public edge.
  */
-export function buildApp(
-  options: { zhoraKb?: ZhoraKbRouteOptions } = {}
-): FastifyInstance {
+export function buildApp(): FastifyInstance {
   const app = Fastify({
     // Fastify ships its own pino logger. Ours is winston, and every other
     // service in the fleet logs through it — two formats in one aggregation
@@ -118,7 +113,6 @@ export function buildApp(
   // the webhook outside the internal-token hook while sharing the path space.
   void app.register(telegramRoutes, { prefix: '/v1/internal' })
   void app.register(zhoraKbRoutes, {
-    ...options.zhoraKb,
     prefix: '/v1/internal/zhora/kb',
   })
 

@@ -18,8 +18,6 @@ export interface ZhoraKbQuery {
   tag?: string
 }
 
-// HTTP validation happens in kb.routes. These functions are internal; the
-// authenticated route supplies the author, never a field from the editor body.
 function entryData(input: Partial<ZhoraKbInput>) {
   return {
     ...(input.questions !== undefined && {

@@ -34,17 +34,15 @@ vi.mock('@config/env', async (importOriginal) => ({
 
 import { prismaSupport } from '@config/database'
 import { buildApp } from '../../src/app'
-import type { ZhoraKbActor } from '@apps/routes/zhora-kb.routes'
 
 const prefix = '/v1/internal/zhora/kb'
 const headers = { 'x-internal-token': 'synthetic-kb-token' }
-let actor: ZhoraKbActor | null = { id: 'admin-one', isAdmin: true }
-// Test-only resolver. No invented admin headers are exposed by the application.
-const app = buildApp({ zhoraKb: { resolveActor: async () => actor } })
+const app = buildApp()
 const payload = () => ({
   questions: [' How to log in? '],
   answerRu: ' Ответ ',
   tag: 'account',
+  updatedById: 'test-user-1',
 })
 const create = (body: object = payload()) =>
   app.inject({ method: 'POST', url: prefix, headers, payload: body })
@@ -66,7 +64,6 @@ beforeAll(async () => {
   await app.ready()
 })
 beforeEach(async () => {
-  actor = { id: 'admin-one', isAdmin: true }
   await prismaSupport.zhoraKbEntry.deleteMany()
 })
 afterAll(async () => {
@@ -80,12 +77,9 @@ afterAll(async () => {
   }
 })
 
-describe('Zhora KB management API (prepared admin adapter)', () => {
-  it('creates a draft, reads it and activates it with partial translations and a verified author', async () => {
-    const response = await create({
-      ...payload(),
-      updatedById: 'forged-author',
-    })
+describe('Zhora KB internal management API', () => {
+  it('creates a draft, reads it and activates it with partial translations and the supplied author', async () => {
+    const response = await create()
     expect(response.statusCode).toBe(201)
     const entry = response.json()
     expect(entry).toMatchObject({
@@ -94,9 +88,8 @@ describe('Zhora KB management API (prepared admin adapter)', () => {
       translations: {},
       domains: [],
       status: 'draft',
-      updatedById: 'admin-one',
+      updatedById: 'test-user-1',
     })
-    actor = { id: 'admin-two', isAdmin: true }
     const update = await app.inject({
       method: 'PATCH',
       url: `${prefix}/${entry.id}`,
@@ -105,6 +98,7 @@ describe('Zhora KB management API (prepared admin adapter)', () => {
         status: 'active',
         translations: { en: ' Answer ' },
         domains: ['BINODEX.IO', 'binodex.io'],
+        updatedById: ' test-user-2 ',
       },
     })
     expect(update.statusCode).toBe(200)
@@ -112,7 +106,7 @@ describe('Zhora KB management API (prepared admin adapter)', () => {
       status: 'active',
       translations: { en: 'Answer' },
       domains: ['binodex.io'],
-      updatedById: 'admin-two',
+      updatedById: 'test-user-2',
       createdAt: entry.createdAt,
     })
     const read = await app.inject({
@@ -163,7 +157,9 @@ describe('Zhora KB management API (prepared admin adapter)', () => {
         method,
         url: `${prefix}/${entry.id}`,
         headers,
-        ...(method === 'PATCH' && { payload: { status: 'active' } }),
+        ...(method === 'PATCH' && {
+          payload: { status: 'active', updatedById: 'test-user-1' },
+        }),
       })
       expect(response.statusCode).toBe(404)
       expect(response.json().code).toBe('KB_NOT_FOUND')
@@ -187,7 +183,7 @@ describe('Zhora KB management API (prepared admin adapter)', () => {
           method: 'PATCH',
           url: `${prefix}/${randomUUID()}`,
           headers,
-          payload: { updatedById: 'forged-author' },
+          payload: { updatedById: 'test-user-1' },
         })
       ).statusCode
     ).toBe(400)
@@ -216,54 +212,54 @@ describe('Zhora KB management API (prepared admin adapter)', () => {
     ).toBe(400)
   })
 
-  it('requires both the service token and a verified administrator for every operation', async () => {
-    for (const access of ['no-token', 'no-actor', 'not-admin'] as const) {
-      actor =
-        access === 'no-actor'
-          ? null
-          : { id: 'operator', isAdmin: access !== 'not-admin' }
-      const auth = access === 'no-token' ? {} : headers
-      for (const method of ['GET', 'POST', 'PATCH', 'DELETE'] as const) {
-        const url =
-          method === 'PATCH' || method === 'DELETE'
-            ? `${prefix}/${randomUUID()}`
-            : prefix
-        const response = await app.inject({
-          method,
-          url,
-          headers: auth,
-          ...(method === 'POST' && { payload: payload() }),
-          ...(method === 'PATCH' && { payload: { status: 'active' } }),
-        })
-        expect(response.statusCode).toBe(access === 'not-admin' ? 403 : 401)
+  it('requires the service token for every operation', async () => {
+    for (const token of [undefined, 'wrong-token']) {
+      const auth = token ? { 'x-internal-token': token } : {}
+      for (const route of [
+        { method: 'GET' as const, url: prefix },
+        { method: 'GET' as const, url: `${prefix}/${randomUUID()}` },
+        { method: 'POST' as const, url: prefix, payload: payload() },
+        {
+          method: 'PATCH' as const,
+          url: `${prefix}/${randomUUID()}`,
+          payload: { status: 'active', updatedById: 'test-user-1' },
+        },
+        { method: 'DELETE' as const, url: `${prefix}/${randomUUID()}` },
+      ]) {
+        expect((await app.inject({ ...route, headers: auth })).statusCode).toBe(
+          401
+        )
       }
     }
     expect(await prismaSupport.zhoraKbEntry.count()).toBe(0)
   })
 
-  it('mounts the API but refuses access until the admin adapter is connected', async () => {
-    const application = buildApp()
-    try {
+  it('requires a nonblank author on creates and edits without changing stored data', async () => {
+    const { updatedById: _author, ...withoutAuthor } = payload()
+    expect((await create(withoutAuthor)).statusCode).toBe(400)
+    expect((await create({ ...payload(), updatedById: ' ' })).statusCode).toBe(
+      400
+    )
+    const entry = (await create()).json()
+    for (const body of [
+      { status: 'active' },
+      { status: 'active', updatedById: ' ' },
+    ]) {
       expect(
-        (await application.inject({ method: 'GET', url: prefix })).statusCode
-      ).toBe(401)
-      for (const method of ['GET', 'POST', 'PATCH', 'DELETE'] as const) {
-        const response = await application.inject({
-          method,
-          url:
-            method === 'PATCH' || method === 'DELETE'
-              ? `${prefix}/${randomUUID()}`
-              : prefix,
-          headers,
-          ...(method === 'POST' && { payload: payload() }),
-          ...(method === 'PATCH' && { payload: { status: 'active' } }),
-        })
-        expect(response.statusCode).toBe(503)
-        expect(response.json().code).toBe('KB_AUTH_NOT_CONFIGURED')
-      }
-      expect(await prismaSupport.zhoraKbEntry.count()).toBe(0)
-    } finally {
-      await application.close()
+        (
+          await app.inject({
+            method: 'PATCH',
+            url: `${prefix}/${entry.id}`,
+            headers,
+            payload: body,
+          })
+        ).statusCode
+      ).toBe(400)
     }
+    const kept = await prismaSupport.zhoraKbEntry.findUniqueOrThrow({
+      where: { id: entry.id },
+    })
+    expect(kept.status).toBe('draft')
+    expect(kept.updatedById).toBe('test-user-1')
   })
 })
