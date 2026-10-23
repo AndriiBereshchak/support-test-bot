@@ -297,6 +297,16 @@ export const ZHORA_MONTHLY_BUDGET_USD = zhoraNumberEnv(
   'ZHORA_MONTHLY_BUDGET_USD',
   300
 )
+// Recent ticket messages used to prepare a reply, oldest first.
+export const ZHORA_CONTEXT_MESSAGE_LIMIT = zhoraNumberEnv(
+  'ZHORA_CONTEXT_MESSAGE_LIMIT',
+  20
+)
+if (!Number.isSafeInteger(ZHORA_CONTEXT_MESSAGE_LIMIT)) {
+  throw new Error(
+    '[support] ZHORA_CONTEXT_MESSAGE_LIMIT must be a safe integer'
+  )
+}
 // Initial transport/generation defaults, not product requirements. Validate
 // them against the selected model when implementing the OpenRouter client.
 export const ZHORA_TIMEOUT_MS = zhoraNumberEnv('ZHORA_TIMEOUT_MS', 30_000)

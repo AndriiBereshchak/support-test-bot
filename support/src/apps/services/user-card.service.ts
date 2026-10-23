@@ -227,12 +227,16 @@ function settled<T>(
 /**
  * Build the support info card for one user.
  *
- * Never throws. A Telegram info card is not worth failing a ticket over: the
+ * By default never throws. A Telegram info card is not worth failing a ticket over: the
  * caller is `ensureTopic`, and a degraded card still gets the topic created
  * and the user's message delivered. Each read is settled independently so one
- * slow aggregate cannot take the profile down with it.
+ * slow aggregate cannot take the profile down with it. AI callers use
+ * requireComplete so fallback zeros/empty values are not treated as facts.
  */
-export async function getUserCard(userId: string): Promise<UserCard> {
+export async function getUserCard(
+  userId: string,
+  options: { requireComplete?: boolean } = {}
+): Promise<UserCard> {
   const [
     profileResult,
     accountsResult,
@@ -341,6 +345,22 @@ export async function getUserCard(userId: string): Promise<UserCard> {
       select: { mutedUntil: true, reason: true },
     }),
   ])
+
+  if (
+    options.requireComplete &&
+    ([
+      profileResult,
+      accountsResult,
+      depositsResult,
+      withdrawalsResult,
+      cardDepositsResult,
+      lastRatingResult,
+      muteResult,
+    ].some((result) => result.status === 'rejected') ||
+      (profileResult.status === 'fulfilled' && !profileResult.value))
+  ) {
+    throw new Error('Complete user card is unavailable')
+  }
 
   const lastRating = settled(
     lastRatingResult,
