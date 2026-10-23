@@ -1,3 +1,4 @@
+import { extname } from 'node:path'
 import type { FastifyPluginAsync } from 'fastify'
 import { INTERNAL_TOKEN } from '@config/env'
 import { ApiError } from '@core/errors/api-error'
@@ -10,36 +11,32 @@ import {
   updateZhoraKbEntry,
   type ZhoraKbInput,
   type ZhoraKbQuery,
+  importZhoraKbEntries,
 } from '@apps/services/zhora/kb.service'
+
+import {
+  kbFields as fields,
+  kbText as text,
+} from '@apps/services/zhora/kb.schema'
+import {
+  parseZhoraKbImport,
+  MAX_KB_IMPORT_ENTRIES,
+} from '@apps/services/zhora/kb-import.service'
 
 type CreateKbBody = ZhoraKbInput & { updatedById: string }
 type UpdateKbBody = Partial<ZhoraKbInput> & { updatedById: string }
 
-const text = { type: 'string', pattern: '\\S' } as const
-const status = { type: 'string', enum: ['draft', 'active'] } as const
-const fields = {
-  questions: { type: 'array', minItems: 1, items: text },
-  answerRu: text,
-  translations: {
+const status = fields.status
+const importSchema = {
+  type: 'array',
+  minItems: 1,
+  maxItems: MAX_KB_IMPORT_ENTRIES,
+  items: {
     type: 'object',
-    // RU is the master answerRu field; translations may be incomplete.
-    propertyNames: {
-      enum: ['en', 'ua', 'de', 'es', 'fr', 'hi', 'tr', 'ar', 'cs', 'it'],
-    },
-    additionalProperties: text,
+    additionalProperties: false,
+    required: ['questions', 'answerRu', 'tag'],
+    properties: fields,
   },
-  tag: text,
-  domains: {
-    type: 'array',
-    items: {
-      type: 'string',
-      maxLength: 253,
-      // Hostnames only: no URL scheme, path, port or wildcard.
-      pattern:
-        '^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z]{2,63}$',
-    },
-  },
-  status,
 } as const
 const params = {
   type: 'object',
@@ -63,6 +60,64 @@ export const zhoraKbRoutes: FastifyPluginAsync = async (app) => {
     ) {
       throw new ApiError('Unauthorized', 401)
     }
+  })
+
+  // multipart/form-data: one UTF-8 .json/.csv file and updatedById field.
+  // JSON is an array of entries. CSV uses matching headers; questions,
+  // translations and domains cells contain JSON values.
+  app.post('/import', async (request, reply) => {
+    const file = await request.file()
+    if (!file) throw new ApiError('file is required', 400, 'NO_FILE')
+    const buffer = await file.toBuffer()
+    // Like attachments, read fields after draining the file so that the author
+    // may appear either before or after it in the multipart body.
+    const author = file.fields.updatedById
+    if (
+      !author ||
+      Array.isArray(author) ||
+      author.type !== 'field' ||
+      typeof author.value !== 'string' ||
+      !author.value.trim()
+    ) {
+      throw new ApiError('updatedById is required', 400, 'KB_IMPORT_INVALID')
+    }
+    const format = extname(file.filename).toLowerCase()
+    if (format !== '.json' && format !== '.csv') {
+      throw new ApiError(
+        'Expected a .json or .csv file',
+        400,
+        'KB_IMPORT_INVALID'
+      )
+    }
+    let content: string
+    try {
+      content = new TextDecoder('utf-8', { fatal: true }).decode(buffer)
+    } catch {
+      throw new ApiError('File must use UTF-8', 400, 'KB_IMPORT_INVALID')
+    }
+    const entries = parseZhoraKbImport(content, format)
+    const validate = request.compileValidationSchema(importSchema)
+    if (!validate(entries)) {
+      const error = validate.errors?.[0]
+      const parts = error?.instancePath.split('/') ?? []
+      const location =
+        parts[1] !== undefined
+          ? `Record ${Number(parts[1]) + 1}${parts.slice(2).length ? ` (${parts.slice(2).join('/')})` : ''}`
+          : 'File'
+      throw new ApiError(
+        `${location}: ${error?.message ?? 'invalid entries'}`,
+        400,
+        'KB_IMPORT_INVALID'
+      )
+    }
+    return reply
+      .code(201)
+      .send(
+        await importZhoraKbEntries(
+          entries as ZhoraKbInput[],
+          author.value.trim()
+        )
+      )
   })
 
   app.post<{ Body: CreateKbBody }>(

@@ -47,6 +47,36 @@ const payload = () => ({
 const create = (body: object = payload()) =>
   app.inject({ method: 'POST', url: prefix, headers, payload: body })
 
+function upload(
+  content: string,
+  filename = 'kb.json',
+  author: string | null = 'test-user-1'
+) {
+  const boundary = 'synthetic-kb-import-boundary'
+  const body = [
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n${content}\r\n`,
+    // Deliberately after the file, as allowed by multipart.
+    ...(author === null
+      ? []
+      : [
+          `--${boundary}\r\nContent-Disposition: form-data; name="updatedById"\r\n\r\n${author}\r\n`,
+        ]),
+    `--${boundary}--\r\n`,
+  ].join('')
+  return app.inject({
+    method: 'POST',
+    url: `${prefix}/import`,
+    headers: {
+      ...headers,
+      'content-type': `multipart/form-data; boundary=${boundary}`,
+    },
+    payload: body,
+  })
+}
+
+const csvCell = (value: unknown) =>
+  `"${(typeof value === 'string' ? value : JSON.stringify(value)).replaceAll('"', '""')}"`
+
 beforeAll(async () => {
   const cli = path.join(
     path.dirname(require.resolve('prisma/package.json')),
@@ -219,6 +249,7 @@ describe('Zhora KB internal management API', () => {
         { method: 'GET' as const, url: prefix },
         { method: 'GET' as const, url: `${prefix}/${randomUUID()}` },
         { method: 'POST' as const, url: prefix, payload: payload() },
+        { method: 'POST' as const, url: `${prefix}/import`, payload: {} },
         {
           method: 'PATCH' as const,
           url: `${prefix}/${randomUUID()}`,
@@ -261,5 +292,132 @@ describe('Zhora KB internal management API', () => {
     })
     expect(kept.status).toBe('draft')
     expect(kept.updatedById).toBe('test-user-1')
+  })
+
+  it('imports JSON with defaults and explicit active status; repeated imports only create new entries', async () => {
+    const entries = [
+      { questions: [' Question '], answerRu: ' Ответ ', tag: 'account' },
+      {
+        questions: ['Other question'],
+        answerRu: 'Другой ответ',
+        tag: 'payments',
+        status: 'active',
+        translations: { en: ' Answer ' },
+        domains: ['BINODEX.IO'],
+      },
+    ]
+    const response = await upload(
+      '\uFEFF' + JSON.stringify(entries),
+      'kb.JSON',
+      ' test-user-2 '
+    )
+    expect(response.statusCode).toBe(201)
+    expect(response.json()).toEqual({ created: 2 })
+    const stored = await prismaSupport.zhoraKbEntry.findMany({
+      orderBy: { tag: 'asc' },
+    })
+    expect(stored[0]).toMatchObject({
+      questions: ['Question'],
+      answerRu: 'Ответ',
+      status: 'draft',
+      domains: [],
+      translations: {},
+      updatedById: 'test-user-2',
+    })
+    expect(stored[1]).toMatchObject({
+      status: 'active',
+      translations: { en: 'Answer' },
+      domains: ['binodex.io'],
+      updatedById: 'test-user-2',
+    })
+    expect((await upload(JSON.stringify(entries))).json()).toEqual({
+      created: 2,
+    })
+    expect(await prismaSupport.zhoraKbEntry.count()).toBe(4)
+  })
+
+  it('imports CSV with JSON cells, escaped quotes, commas and multiline answers', async () => {
+    const answer = 'Ответ, с "кавычками"\nи переносом строки'
+    const csv =
+      '\uFEFFquestions,answerRu,tag,translations,domains,status\r\n' +
+      [
+        [
+          ['Question', 'Variant'],
+          answer,
+          'account',
+          { en: 'Answer' },
+          ['binodex.io'],
+          'active',
+        ]
+          .map(csvCell)
+          .join(','),
+        [['Second'], 'Второй ответ', 'account', '', '', '']
+          .map(csvCell)
+          .join(','),
+      ].join('\r\n')
+    const response = await upload(csv, 'kb.csv')
+    expect(response.statusCode).toBe(201)
+    expect(response.json()).toEqual({ created: 2 })
+    const stored = await prismaSupport.zhoraKbEntry.findMany()
+    expect(stored).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          questions: ['Question', 'Variant'],
+          answerRu: answer,
+          translations: { en: 'Answer' },
+          domains: ['binodex.io'],
+          status: 'active',
+        }),
+        expect.objectContaining({
+          questions: ['Second'],
+          translations: {},
+          domains: [],
+          status: 'draft',
+        }),
+      ])
+    )
+  })
+
+  it('rejects an invalid record before writing any part of the import', async () => {
+    await create()
+    const { updatedById: _author, ...valid } = payload()
+    const response = await upload(
+      JSON.stringify([valid, { ...valid, translations: { pl: 'Answer' } }])
+    )
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({ code: 'KB_IMPORT_INVALID' })
+    expect(response.json().message).toContain('Record 2')
+    const csv =
+      'questions,answerRu,tag\n' +
+      [
+        [['Valid'], 'Ответ', 'account'].map(csvCell).join(','),
+        ['not-json', 'Ответ', 'account'].map(csvCell).join(','),
+      ].join('\n')
+    const invalidCsv = await upload(csv, 'kb.csv')
+    expect(invalidCsv.statusCode).toBe(400)
+    expect(invalidCsv.json().message).toContain('Record 2')
+    expect(await prismaSupport.zhoraKbEntry.count()).toBe(1)
+  })
+
+  it('rejects malformed, empty, oversized batches, missing authors and unsupported files', async () => {
+    for (const content of [
+      '{broken',
+      '{}',
+      '[]',
+      JSON.stringify(Array.from({ length: 1001 }, () => payload())),
+    ]) {
+      expect((await upload(content)).statusCode).toBe(400)
+    }
+    for (const content of [
+      'questions,answerRu,tag\n"unclosed',
+      'questions,questions\nfirst,second',
+      'unknown\nvalue',
+    ]) {
+      expect((await upload(content, 'kb.csv')).statusCode).toBe(400)
+    }
+    expect((await upload('[]', 'kb.txt')).statusCode).toBe(400)
+    expect((await upload('[]', 'kb.json', null)).statusCode).toBe(400)
+    expect((await upload('[]', 'kb.json', ' ')).statusCode).toBe(400)
+    expect(await prismaSupport.zhoraKbEntry.count()).toBe(0)
   })
 })

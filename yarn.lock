@@ -1787,6 +1787,7 @@ __metadata:
     "@prisma/client": "npm:^6.15.0"
     "@sentry/node": "npm:^9.35.0"
     "@types/node": "npm:^24.0.10"
+    csv-parse: "npm:^7.0.3"
     dotenv: "npm:^17.0.1"
     fastify: "npm:^5.10.0"
     grammy: "npm:^1.45.1"
@@ -2126,6 +2127,13 @@ __metadata:
     shebang-command: "npm:^2.0.0"
     which: "npm:^2.0.1"
   checksum: 10c0/053ea8b2135caff68a9e81470e845613e374e7309a47731e81639de3eaeb90c3d01af0e0b44d2ab9d50b43467223b88567dfeb3262db942dc063b9976718ffc1
+  languageName: node
+  linkType: hard
+
+"csv-parse@npm:^7.0.3":
+  version: 7.0.3
+  resolution: "csv-parse@npm:7.0.3"
+  checksum: 10c0/90d444df5bb14a5531fb87163be5236951a43092934c9ea10e1308cceefdd692c8c0b49f93c616a92a1c9695f371a376268bf45325bb88f60a1328274748cc25
   languageName: node
   linkType: hard
 

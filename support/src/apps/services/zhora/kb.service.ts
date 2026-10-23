@@ -42,21 +42,36 @@ function entryData(input: Partial<ZhoraKbInput>) {
   }
 }
 
+function createData(input: ZhoraKbInput, authorId: string) {
+  const data = entryData(input)
+  return {
+    ...data,
+    questions: input.questions.map((question) => question.trim()),
+    answerRu: input.answerRu.trim(),
+    tag: input.tag.trim(),
+    translations: data.translations ?? {},
+    updatedById: authorId,
+  }
+}
+
 export async function createZhoraKbEntry(
   input: ZhoraKbInput,
   authorId: string
 ) {
-  const data = entryData(input)
   return prismaSupport.zhoraKbEntry.create({
-    data: {
-      ...data,
-      questions: input.questions.map((question) => question.trim()),
-      answerRu: input.answerRu.trim(),
-      tag: input.tag.trim(),
-      translations: data.translations ?? {},
-      updatedById: authorId,
-    },
+    data: createData(input, authorId),
   })
+}
+
+export async function importZhoraKbEntries(
+  entries: ZhoraKbInput[],
+  authorId: string
+) {
+  // createMany is atomic: a database error cannot leave a partial import.
+  const result = await prismaSupport.zhoraKbEntry.createMany({
+    data: entries.map((entry) => createData(entry, authorId)),
+  })
+  return { created: result.count }
 }
 
 export async function listZhoraKbEntries(query: ZhoraKbQuery) {
