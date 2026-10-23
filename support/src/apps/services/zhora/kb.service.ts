@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto'
 import { Prisma } from '@prisma-support'
 import { prismaSupport } from '@config/database'
 import { ApiError } from '@core/errors/api-error'
+import { enqueueKbEmbeddings } from './kb-search.service'
 
 export interface ZhoraKbInput {
   questions: string[]
@@ -17,6 +19,20 @@ export interface ZhoraKbQuery {
   status?: 'draft' | 'active'
   tag?: string
 }
+
+// Keep internal index metadata out of the KB management response.
+const entrySelect = {
+  id: true,
+  questions: true,
+  answerRu: true,
+  translations: true,
+  tag: true,
+  domains: true,
+  status: true,
+  updatedById: true,
+  createdAt: true,
+  updatedAt: true,
+} as const
 
 function entryData(input: Partial<ZhoraKbInput>) {
   return {
@@ -58,8 +74,13 @@ export async function createZhoraKbEntry(
   input: ZhoraKbInput,
   authorId: string
 ) {
-  return prismaSupport.zhoraKbEntry.create({
-    data: createData(input, authorId),
+  return prismaSupport.$transaction(async (tx) => {
+    const entry = await tx.zhoraKbEntry.create({
+      data: createData(input, authorId),
+      select: entrySelect,
+    })
+    if (entry.status === 'active') await enqueueKbEmbeddings([entry.id], tx)
+    return entry
   })
 }
 
@@ -67,11 +88,21 @@ export async function importZhoraKbEntries(
   entries: ZhoraKbInput[],
   authorId: string
 ) {
-  // createMany is atomic: a database error cannot leave a partial import.
-  const result = await prismaSupport.zhoraKbEntry.createMany({
-    data: entries.map((entry) => createData(entry, authorId)),
+  // Allocate IDs before the bulk insert so the queue targets this import only.
+  const data = entries.map((entry) => ({
+    id: randomUUID(),
+    ...createData(entry, authorId),
+  }))
+  return prismaSupport.$transaction(async (tx) => {
+    const result = await tx.zhoraKbEntry.createMany({ data })
+    await enqueueKbEmbeddings(
+      data
+        .filter((entry) => entry.status === 'active')
+        .map((entry) => entry.id),
+      tx
+    )
+    return { created: result.count }
   })
-  return { created: result.count }
 }
 
 export async function listZhoraKbEntries(query: ZhoraKbQuery) {
@@ -83,6 +114,7 @@ export async function listZhoraKbEntries(query: ZhoraKbQuery) {
   }
   const [items, total] = await prismaSupport.$transaction([
     prismaSupport.zhoraKbEntry.findMany({
+      select: entrySelect,
       where,
       take: limit,
       skip: offset,
@@ -94,7 +126,10 @@ export async function listZhoraKbEntries(query: ZhoraKbQuery) {
 }
 
 export async function getZhoraKbEntry(id: string) {
-  const entry = await prismaSupport.zhoraKbEntry.findUnique({ where: { id } })
+  const entry = await prismaSupport.zhoraKbEntry.findUnique({
+    where: { id },
+    select: entrySelect,
+  })
   if (!entry) throw new ApiError('KB entry not found', 404, 'KB_NOT_FOUND')
   return entry
 }
@@ -119,9 +154,21 @@ export async function updateZhoraKbEntry(
   authorId: string
 ) {
   return withNotFound(() =>
-    prismaSupport.zhoraKbEntry.update({
-      where: { id },
-      data: { ...entryData(input), updatedById: authorId },
+    prismaSupport.$transaction(async (tx) => {
+      const entry = await tx.zhoraKbEntry.update({
+        select: entrySelect,
+        where: { id },
+        data: { ...entryData(input), updatedById: authorId },
+      })
+      if (
+        entry.status === 'active' &&
+        (input.questions !== undefined ||
+          input.answerRu !== undefined ||
+          input.status === 'active')
+      ) {
+        await enqueueKbEmbeddings([id], tx)
+      }
+      return entry
     })
   )
 }

@@ -7,6 +7,10 @@ import { logger } from '@config/logger'
 
 import { ZhoraBudgetError } from './budget.service'
 import {
+  enqueuePendingKbEmbeddings,
+  indexZhoraKbJob,
+} from './kb-search.service'
+import {
   generateZhoraTextWithJournal,
   temporaryDatabaseError,
 } from './llm.service'
@@ -22,6 +26,7 @@ import {
 const POLL_INTERVAL_MS = 1000
 const LEASE_MS = 60_000
 const HEARTBEAT_MS = 15_000
+const KB_DISCOVERY_INTERVAL_MS = 15 * 60_000
 
 export async function enqueueZhoraJob(args: {
   eventKey: string
@@ -152,11 +157,14 @@ async function finishJob(
 async function executeJob(job: ZhoraJob): Promise<void> {
   let result
   try {
-    result = await generateZhoraTextWithJournal(readInput(job), {
-      ticketId: job.ticketId,
-      agentId: job.agentId,
-      jobId: job.id,
-    })
+    result =
+      job.operation === 'embedding'
+        ? await indexZhoraKbJob(job)
+        : await generateZhoraTextWithJournal(readInput(job), {
+            ticketId: job.ticketId,
+            agentId: job.agentId,
+            jobId: job.id,
+          })
   } catch (error) {
     const code =
       error instanceof ZhoraBudgetError || error instanceof OpenRouterError
@@ -228,9 +236,20 @@ export function startZhoraWorker(): () => Promise<void> {
   if (!ZHORA_ENABLED) return async () => undefined
   let stopping = false
   let active: Promise<void> | undefined
+  let nextKbDiscovery = 0
+  let kbCursor: string | null = null
   const tick = () => {
     if (stopping || active) return
-    active = runZhoraJobPass(() => stopping)
+    active = (async () => {
+      if (Date.now() >= nextKbDiscovery) {
+        const batch = await enqueuePendingKbEmbeddings(kbCursor)
+        kbCursor = batch.nextCursor
+        // Walk the existing KB once at startup/model change, then reconcile
+        // periodically. Ordinary CRUD writes already enqueue their own jobs.
+        nextKbDiscovery = Date.now() + (kbCursor ? 0 : KB_DISCOVERY_INTERVAL_MS)
+      }
+      await runZhoraJobPass(() => stopping)
+    })()
       .catch(() => {
         logger.warn('[zhora] job pass failed; no automatic generation retry')
       })

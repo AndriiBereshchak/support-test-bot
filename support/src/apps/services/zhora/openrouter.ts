@@ -5,9 +5,10 @@ import {
   ZHORA_MODEL_REPLY,
   ZHORA_MODEL_FIX,
   ZHORA_MODEL_BRIEF,
-  ZHORA_MODEL_TAG,
+  ZHORA_MODEL_TAGS,
   ZHORA_MODEL_CLUSTER,
-  ZHORA_MODEL_DRAFT,
+  ZHORA_MODEL_CANDIDATES,
+  ZHORA_MODEL_EMBEDDING,
   ZHORA_TIMEOUT_MS,
   ZHORA_MAX_OUTPUT_TOKENS,
 } from '@config/env'
@@ -29,6 +30,20 @@ export interface OpenRouterInput {
   /** Explicit cache blocks: set only for a compatible model/provider.
    * Other providers may cache implicitly. This is not a response cache. */
   cachePrompt?: boolean
+}
+
+// Fixed with the pgvector column/index; changing dimensions needs reindexing.
+export const ZHORA_EMBEDDING_DIMENSIONS = 1024
+
+export interface OpenRouterEmbeddingInput {
+  operation: 'embedding'
+  input: string
+}
+
+export type OpenRouterCallInput = OpenRouterInput | OpenRouterEmbeddingInput
+
+export interface OpenRouterEmbeddingResult extends OpenRouterMetadata {
+  embedding: number[]
 }
 
 export interface OpenRouterUsage {
@@ -103,7 +118,7 @@ function readUsage(value: unknown): OpenRouterUsage {
 }
 
 /** Validate before creating a pending journal record or checking the budget. */
-export function getZhoraModel(input: OpenRouterInput): string {
+export function getZhoraModel(input: OpenRouterCallInput): string {
   if (!ZHORA_ENABLED) throw new OpenRouterError('disabled')
   if (!ZHORA_OPENROUTER_API_KEY) throw new OpenRouterError('api_key_missing')
   const models: Record<ZhoraOperation, string> = {
@@ -111,13 +126,19 @@ export function getZhoraModel(input: OpenRouterInput): string {
     reply: ZHORA_MODEL_REPLY,
     fix: ZHORA_MODEL_FIX,
     brief: ZHORA_MODEL_BRIEF,
-    tag: ZHORA_MODEL_TAG,
+    tag: ZHORA_MODEL_TAGS,
     cluster: ZHORA_MODEL_CLUSTER,
-    draft: ZHORA_MODEL_DRAFT,
+    draft: ZHORA_MODEL_CANDIDATES,
   }
-  const model = models[input.operation]
+  const model =
+    input.operation === 'embedding'
+      ? ZHORA_MODEL_EMBEDDING
+      : models[input.operation]
   if (!model) throw new OpenRouterError('model_missing')
-  if (!input.systemPrompt.trim() || !input.input.trim())
+  if (
+    !input.input.trim() ||
+    (input.operation !== 'embedding' && !input.systemPrompt.trim())
+  )
     throw new OpenRouterError('invalid_input')
   return model
 }
@@ -179,6 +200,37 @@ export async function generateZhoraText(
     text,
     ...(input.cachePrompt ? { cache_control: { type: 'ephemeral' } } : {}),
   }))
+  const { body, details } = await requestGeneration('chat/completions', model, {
+    stream: false,
+    max_tokens: ZHORA_MAX_OUTPUT_TOKENS,
+    messages: [
+      { role: 'system', content },
+      { role: 'user', content: input.input },
+    ],
+  })
+  const choice = object(
+    Array.isArray(body.choices) ? body.choices[0] : undefined
+  )
+  if (body.error || choice.error)
+    throw new OpenRouterError('provider_error', details)
+  if (typeof choice.finish_reason !== 'string')
+    throw new OpenRouterError('invalid_response', details)
+  // Preserve paid usage on truncation/refusal; never offer partial text as a
+  // finished operator draft. HTTP 200 alone does not indicate success.
+  if (choice.finish_reason !== 'stop')
+    throw new OpenRouterError('incomplete_response', details)
+  const message = object(choice.message)
+  if (typeof message.content !== 'string' || !message.content.trim())
+    throw new OpenRouterError('invalid_response', details)
+  return { ...details, text: message.content }
+}
+
+// Shared transport preserves the same timeout, error metadata and no-retry rule.
+async function requestGeneration(
+  path: 'chat/completions' | 'embeddings',
+  model: string,
+  payload: Record<string, unknown>
+): Promise<{ body: Record<string, unknown>; details: OpenRouterMetadata }> {
   const started = Date.now()
   const signal = AbortSignal.timeout(ZHORA_TIMEOUT_MS)
   let response: Response | undefined
@@ -193,7 +245,7 @@ export async function generateZhoraText(
   })
 
   try {
-    response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    response = await fetch(`https://openrouter.ai/api/v1/${path}`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${ZHORA_OPENROUTER_API_KEY}`,
@@ -201,15 +253,7 @@ export async function generateZhoraText(
       },
       redirect: 'error',
       signal,
-      body: JSON.stringify({
-        model,
-        stream: false,
-        max_tokens: ZHORA_MAX_OUTPUT_TOKENS,
-        messages: [
-          { role: 'system', content },
-          { role: 'user', content: input.input },
-        ],
-      }),
+      body: JSON.stringify({ ...payload, model }),
     })
   } catch {
     throw new OpenRouterError(
@@ -233,19 +277,43 @@ export async function generateZhoraText(
   }
   const details = metadata(body)
   if (!response.ok) throw new OpenRouterError('http_error', details)
-  const choice = object(
-    Array.isArray(body.choices) ? body.choices[0] : undefined
+  if (body.error) throw new OpenRouterError('provider_error', details)
+  return { body, details }
+}
+
+export function validEmbedding(value: unknown): value is number[] {
+  return (
+    Array.isArray(value) &&
+    value.length === ZHORA_EMBEDDING_DIMENSIONS &&
+    value.every(
+      (item) =>
+        typeof item === 'number' &&
+        Number.isFinite(item) &&
+        Math.abs(item) <= 3.4e38
+    ) &&
+    value.some((item) => item !== 0)
   )
-  if (body.error || choice.error)
-    throw new OpenRouterError('provider_error', details)
-  if (typeof choice.finish_reason !== 'string')
+}
+
+export async function generateZhoraEmbedding(
+  input: OpenRouterEmbeddingInput
+): Promise<OpenRouterEmbeddingResult> {
+  const model = getZhoraModel(input)
+  const { body, details } = await requestGeneration('embeddings', model, {
+    input: input.input,
+    dimensions: ZHORA_EMBEDDING_DIMENSIONS,
+    encoding_format: 'float',
+  })
+  const items = Array.isArray(body.data) ? body.data : []
+  const item = object(items[0])
+  if (
+    items.length !== 1 ||
+    item.index !== 0 ||
+    !validEmbedding(item.embedding)
+  ) {
     throw new OpenRouterError('invalid_response', details)
-  // Preserve paid usage on truncation/refusal; never offer partial text as a
-  // finished operator draft. HTTP 200 alone does not indicate success.
-  if (choice.finish_reason !== 'stop')
-    throw new OpenRouterError('incomplete_response', details)
-  const message = object(choice.message)
-  if (typeof message.content !== 'string' || !message.content.trim())
-    throw new OpenRouterError('invalid_response', details)
-  return { ...details, text: message.content }
+  }
+  // Embeddings do not generate output tokens, even when the API omits the count.
+  details.usage.outputTokens = 0
+  return { ...details, embedding: item.embedding }
 }

@@ -67,6 +67,18 @@ async function main(): Promise<void> {
       )
     }
 
+    if (answering && s.postgres) {
+      const available = execSync(
+        `docker exec ${PG_CONTAINER} psql -U test -d ${PG_DB} -tAc "SELECT count(*) FROM pg_available_extensions WHERE name = 'vector'"`,
+        { encoding: 'utf8' }
+      ).trim()
+      if (available !== '1') {
+        throw new Error(
+          'The existing support test container has no pgvector. Back up its data before recreating postgres-support with the image in docker-compose.test.yml; this runner never replaces it automatically.'
+        )
+      }
+    }
+
     if (answering) {
       console.log(
         `✓ ${s.compose} already answering on ${s.host}:${s.port} — skipping`

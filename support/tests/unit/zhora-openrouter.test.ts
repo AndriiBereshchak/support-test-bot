@@ -7,9 +7,10 @@ const settings = vi.hoisted(() => ({
   ZHORA_MODEL_REPLY: 'test/reply',
   ZHORA_MODEL_FIX: 'test/fix',
   ZHORA_MODEL_BRIEF: 'test/brief',
-  ZHORA_MODEL_TAG: 'test/tag',
+  ZHORA_MODEL_TAGS: 'test/tag',
   ZHORA_MODEL_CLUSTER: 'test/cluster',
-  ZHORA_MODEL_DRAFT: 'test/draft',
+  ZHORA_MODEL_CANDIDATES: 'test/draft',
+  ZHORA_MODEL_EMBEDDING: 'test/embedding',
   ZHORA_TIMEOUT_MS: 30_000,
   ZHORA_MAX_OUTPUT_TOKENS: 2048,
 }))
@@ -32,6 +33,8 @@ vi.mock('@config/env', async (importOriginal) => ({
 
 import {
   generateZhoraText,
+  generateZhoraEmbedding,
+  ZHORA_EMBEDDING_DIMENSIONS,
   getOpenRouterMonthlyUsage,
   getOpenRouterGenerationCost,
   OpenRouterError,
@@ -70,7 +73,63 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('OpenRouter text client', () => {
+describe('OpenRouter client', () => {
+  it('requests fixed-size embeddings without text-generation parameters and preserves cost', async () => {
+    const embedding = Array.from(
+      { length: ZHORA_EMBEDDING_DIMENSIONS },
+      (_, index) => (index === 0 ? 1 : 0)
+    )
+    request.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          model: 'test/embedding',
+          data: [{ index: 0, embedding }],
+          usage: { prompt_tokens: 10, total_tokens: 10, cost: 0.0001 },
+        })
+      )
+    )
+    const result = await generateZhoraEmbedding({
+      operation: 'embedding',
+      input: 'Synthetic KB text',
+    })
+    expect(result).toMatchObject({
+      embedding,
+      usage: { inputTokens: 10, outputTokens: 0, costUsd: 0.0001 },
+    })
+    expect(request.mock.calls[0]![0]).toBe(
+      'https://openrouter.ai/api/v1/embeddings'
+    )
+    expect(JSON.parse(String(request.mock.calls[0]![1]!.body))).toEqual({
+      model: 'test/embedding',
+      input: 'Synthetic KB text',
+      dimensions: 1024,
+      encoding_format: 'float',
+    })
+    expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects wrong-sized or zero embeddings while retaining paid usage metadata', async () => {
+    for (const embedding of [[1, 0], Array(1024).fill(0)]) {
+      request.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [{ index: 0, embedding }],
+            usage: { cost: 0.001 },
+          })
+        )
+      )
+      await expect(
+        generateZhoraEmbedding({
+          operation: 'embedding',
+          input: 'Synthetic text',
+        })
+      ).rejects.toMatchObject({
+        code: 'invalid_response',
+        details: { usage: { costUsd: 0.001 } },
+      })
+    }
+    expect(request).toHaveBeenCalledTimes(2)
+  })
   it('uses the configured model and returns text with actual usage', async () => {
     request.mockResolvedValue(new Response(JSON.stringify(completion())))
     const result = await generateZhoraText(prompt)
@@ -124,6 +183,22 @@ describe('OpenRouter text client', () => {
       },
     ])
     expect(body.messages[1]).toEqual({ role: 'user', content: prompt.input })
+  })
+
+  it('can switch replies to another model without changing tags or candidate drafts', async () => {
+    // Each fetch needs its own response body.
+    request.mockImplementation(
+      async () => new Response(JSON.stringify(completion()))
+    )
+    settings.ZHORA_MODEL_REPLY = 'test/sonnet'
+    await generateZhoraText(prompt)
+    await generateZhoraText({ ...prompt, operation: 'tag' })
+    await generateZhoraText({ ...prompt, operation: 'draft' })
+    expect(
+      request.mock.calls.map(
+        ([, options]) => JSON.parse(String(options!.body)).model
+      )
+    ).toEqual(['test/sonnet', 'test/tag', 'test/draft'])
   })
 
   it('does not make requests when disabled, missing credentials or missing a model', async () => {

@@ -13,9 +13,8 @@
 
 services:
   postgres-support:
-    # Plain postgres: unlike exchange, this schema has no hypertables and no
-    # continuous aggregates, so there is nothing here that needs TimescaleDB.
-    image: postgres:16-alpine
+    # PostgreSQL 16 with pgvector for Zhora KB search; no TimescaleDB needed.
+    image: pgvector/pgvector:0.8.7-pg16
     container_name: binodex-test-pg-support
     environment:
       POSTGRES_DB: support_test

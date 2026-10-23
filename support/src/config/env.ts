@@ -286,9 +286,10 @@ export const ZHORA_MODEL_TRANSLATE =
 export const ZHORA_MODEL_REPLY = process.env.ZHORA_MODEL_REPLY?.trim() ?? ''
 export const ZHORA_MODEL_FIX = process.env.ZHORA_MODEL_FIX?.trim() ?? ''
 export const ZHORA_MODEL_BRIEF = process.env.ZHORA_MODEL_BRIEF?.trim() ?? ''
-export const ZHORA_MODEL_TAG = process.env.ZHORA_MODEL_TAG?.trim() ?? ''
+export const ZHORA_MODEL_TAGS = process.env.ZHORA_MODEL_TAGS?.trim() ?? ''
 export const ZHORA_MODEL_CLUSTER = process.env.ZHORA_MODEL_CLUSTER?.trim() ?? ''
-export const ZHORA_MODEL_DRAFT = process.env.ZHORA_MODEL_DRAFT?.trim() ?? ''
+export const ZHORA_MODEL_CANDIDATES =
+  process.env.ZHORA_MODEL_CANDIDATES?.trim() ?? ''
 export const ZHORA_MODEL_EMBEDDING =
   process.env.ZHORA_MODEL_EMBEDDING?.trim() ?? ''
 
@@ -329,9 +330,9 @@ export function assertRequiredEnv(): void {
       ZHORA_MODEL_REPLY,
       ZHORA_MODEL_FIX,
       ZHORA_MODEL_BRIEF,
-      ZHORA_MODEL_TAG,
+      ZHORA_MODEL_TAGS,
       ZHORA_MODEL_CLUSTER,
-      ZHORA_MODEL_DRAFT,
+      ZHORA_MODEL_CANDIDATES,
       ZHORA_MODEL_EMBEDDING,
     }
     for (const [key, value] of Object.entries(required)) {

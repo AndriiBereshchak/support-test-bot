@@ -503,5 +503,12 @@ model ZhoraKbEntry {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz()
 
+  // pgvector is queried with parameterized SQL; Prisma omits this unsupported
+  // nullable field from ordinary CRUD results. A hash ties it to the source text.
+  embedding          Unsupported("vector(1024)")?
+  embeddingModel     String?                      @map("embedding_model")
+  embeddingHash      String?                      @map("embedding_hash") @db.VarChar(32)
+  embeddingIndexedAt DateTime?                    @map("embedding_indexed_at") @db.Timestamptz()
+
   @@map("zhora_kb_entries")
 }

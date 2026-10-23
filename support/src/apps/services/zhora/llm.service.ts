@@ -7,10 +7,13 @@ import { logger } from '@config/logger'
 
 import {
   generateZhoraText,
+  generateZhoraEmbedding,
   getZhoraModel,
   getOpenRouterGenerationCost,
   OpenRouterError,
   type OpenRouterInput,
+  type OpenRouterCallInput,
+  type OpenRouterEmbeddingResult,
   type OpenRouterMetadata,
   type OpenRouterResult,
 } from './openrouter'
@@ -40,7 +43,7 @@ export function temporaryDatabaseError(error: unknown): boolean {
 
 async function recordCall(
   call: { id: string; createdAt: Date },
-  operation: OpenRouterInput['operation'],
+  operation: OpenRouterCallInput['operation'],
   context: CallContext,
   metadata: OpenRouterMetadata,
   outcome: string
@@ -86,7 +89,7 @@ async function recordCall(
 
 async function completeCall(
   call: { id: string; createdAt: Date },
-  input: OpenRouterInput,
+  input: OpenRouterCallInput,
   context: CallContext,
   metadata: OpenRouterMetadata,
   outcome: string
@@ -111,12 +114,12 @@ async function completeCall(
   }
 }
 
-/** Application entry point for budget-checked, audited text generation.
- * Retries only journal writes; never repeats the paid generation. */
-export async function generateZhoraTextWithJournal(
-  input: OpenRouterInput,
-  context: CallContext = {}
-): Promise<OpenRouterResult> {
+/** Shared admission/audit path; never repeats a paid generation. */
+async function generateWithJournal<T extends OpenRouterMetadata>(
+  input: OpenRouterCallInput,
+  context: CallContext,
+  generate: () => Promise<T>
+): Promise<T> {
   const model = getZhoraModel(input)
   await assertZhoraBudget()
   const call = { id: randomUUID(), createdAt: new Date() }
@@ -144,9 +147,9 @@ export async function generateZhoraTextWithJournal(
   } catch {
     throw new ZhoraBudgetError('budget_unavailable')
   }
-  let result: OpenRouterResult
+  let result: T
   try {
-    result = await generateZhoraText(input)
+    result = await generate()
   } catch (error) {
     if (error instanceof OpenRouterError && error.details) {
       await completeCall(call, input, context, error.details, error.code)
@@ -155,4 +158,21 @@ export async function generateZhoraTextWithJournal(
   }
   await completeCall(call, input, context, result, 'ok')
   return result
+}
+
+export function generateZhoraTextWithJournal(
+  input: OpenRouterInput,
+  context: CallContext = {}
+): Promise<OpenRouterResult> {
+  return generateWithJournal(input, context, () => generateZhoraText(input))
+}
+
+export function generateZhoraEmbeddingWithJournal(
+  text: string,
+  context: CallContext = {}
+): Promise<OpenRouterEmbeddingResult> {
+  const input = { operation: 'embedding' as const, input: text }
+  return generateWithJournal(input, context, () =>
+    generateZhoraEmbedding(input)
+  )
 }
