@@ -485,3 +485,23 @@ model ZhoraJob {
   @@index([status, leaseExpiresAt])
   @@map("zhora_jobs")
 }
+
+// One knowledge entry: question variants, RU master answer and translations.
+// Language completeness and JSON shape are validated by the later KB API.
+model ZhoraKbEntry {
+  id           String   @id @default(uuid()) @db.Uuid
+  questions    String[]
+  answerRu     String   @map("answer_ru")
+  translations Json
+  tag          String
+  // Empty means unrestricted; otherwise only the listed domains may use it.
+  domains      String[] @default([])
+  // draft / active. Only active entries participate in answer retrieval.
+  status       String   @default("draft") @db.VarChar(16)
+  // External admin identity; no assumption that it is a SupportAgent ID.
+  updatedById  String   @map("updated_by_id")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@map("zhora_kb_entries")
+}
