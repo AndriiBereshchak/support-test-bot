@@ -50,6 +50,7 @@ import { getUserCard } from '@apps/services/user-card.service'
 import { escapeHtml } from '@telegram/text'
 
 import { DURATION_HINT, parseDuration } from '@core/duration'
+import { prepareZhoraInvocation } from './zhora'
 
 import {
   deleteTopicMessage,
@@ -185,6 +186,25 @@ export async function handleCommand(
   command: ParsedCommand
 ): Promise<void> {
   switch (command.name) {
+    case 'zhora':
+    case 'fix':
+    case 'brief': {
+      const invocation = await prepareZhoraInvocation({
+        chatId: ctx.chatId,
+        topicId: ctx.topicId,
+        fromId: ctx.fromId,
+        isBot: ctx.message.from?.is_bot,
+        // /fix has its own draft-reply flow; do not require its source to be IN.
+        tgMessageId:
+          command.name === 'zhora'
+            ? ctx.message.reply_to_message?.message_id
+            : undefined,
+      })
+      if (!invocation) return
+      // Generation/fix/brief handlers are added in their own implementation
+      // blocks. Keep the commands consumed and private in the meantime.
+      return reply(ctx, 'Эта команда Жоры пока недоступна.')
+    }
     case 'help':
     case 'start':
       return reply(ctx, HELP_TEXT)

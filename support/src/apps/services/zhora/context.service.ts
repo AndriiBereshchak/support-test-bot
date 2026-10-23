@@ -6,6 +6,7 @@ import { ApiError } from '@core/errors/api-error'
 import { listUserDeposits } from '../deposit-list.service'
 import { listUserWithdrawals } from '../withdrawal-list.service'
 import { getUserCard } from '../user-card.service'
+import { assertZhoraTicketAvailable } from './access.service'
 import { searchZhoraKb } from './kb-search.service'
 
 const SEARCH_MESSAGE_LIMIT = 5
@@ -84,24 +85,7 @@ export async function buildZhoraContext(input: ZhoraContextInput) {
   ) {
     throw new ApiError('Forbidden', 403)
   }
-  if (ticket.status !== 'OPEN') {
-    throw new ApiError('Ticket is closed', 409, 'TICKET_CLOSED')
-  }
-  // Unlike the chat's fail-open mute display, an unreadable access check must
-  // stop a new AI operation. Do not substitute "not muted" on a DB failure.
-  const mute = await prismaSupport.supportMute.findUnique({
-    where: {
-      product_userId: { product: ticket.product, userId: ticket.userId },
-    },
-    select: { mutedUntil: true },
-  })
-  if (mute?.mutedUntil && mute.mutedUntil.getTime() > Date.now()) {
-    throw new ApiError(
-      'Support access is temporarily restricted',
-      403,
-      'SUPPORT_MUTED'
-    )
-  }
+  await assertZhoraTicketAvailable(ticket)
 
   const conversation: Prisma.SupportMessageWhereInput = {
     ticketId: ticket.id,

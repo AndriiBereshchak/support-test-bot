@@ -216,6 +216,9 @@ async function onMessage(message: Message): Promise<void> {
 async function onEditedMessage(message: Message): Promise<void> {
   if (!isSupportChat(message)) return
   if (message.from?.is_bot) return
+  // Editing an existing operator reply into /fix (or another command) must
+  // neither execute the command nor replace the customer's text with it.
+  if (parseCommand(message)) return
 
   const topicId = topicIdOf(message)
   if (topicId == null) return
