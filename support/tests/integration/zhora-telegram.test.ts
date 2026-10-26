@@ -11,6 +11,7 @@ vi.mock('@config/env', async (importOriginal) => ({
   ZHORA_OPENROUTER_API_KEY: 'synthetic-telegram-test-key',
   ZHORA_MODEL_REPLY: 'test/reply',
   ZHORA_MODEL_FIX: 'test/fix',
+  ZHORA_MODEL_BRIEF: 'test/brief',
   ZHORA_MODEL_TRANSLATE: 'test/translate',
 }))
 vi.mock('@apps/services/push.service', () => ({ pushToUser: vi.fn() }))
@@ -161,13 +162,12 @@ describe('Zhora Telegram preflight', () => {
       })
     )
     for (const update of updates) await handleUpdate(update)
-    expect(sent()).toHaveBeenCalledTimes(4)
+    expect(sent()).toHaveBeenCalledTimes(3)
     expect(sent().mock.calls[0]![0].text).toContain(
       'Не удалось определить язык этого сообщения'
     )
     expect(sent().mock.calls[1]![0].text).toContain('язык')
-    expect(sent().mock.calls[2]![0].text).toContain('пока недоступна')
-    expect(sent().mock.calls[3]![0].text).toContain('язык')
+    expect(sent().mock.calls[2]![0].text).toContain('язык')
     expect(
       await prismaSupport.supportMessage.count({
         where: { ticketId: ticket.id },
@@ -175,6 +175,25 @@ describe('Zhora Telegram preflight', () => {
     ).toBe(1)
     expect(pushToUser).not.toHaveBeenCalled()
     expect(telegram.downloadFile).not.toHaveBeenCalled()
+  })
+
+  it('queues one private /brief job for a repeated command update', async () => {
+    const update = agentMessageUpdate({
+      topicId: ticket.tgTopicId!,
+      messageId: randomInt(1000, 2_000_000_000),
+      fromId,
+      text: '/brief',
+    })
+    await handleUpdate(update)
+    await handleUpdate(update)
+    expect(
+      await prismaSupport.zhoraJob.count({
+        where: { ticketId: ticket.id, operation: 'brief' },
+      })
+    ).toBe(1)
+    expect(await outgoing()).toHaveLength(0)
+    expect(pushToUser).not.toHaveBeenCalled()
+    expect(sent()).not.toHaveBeenCalled()
   })
 
   it('resolves the current ticket, customer message and invoking operator without requiring a profile', async () => {

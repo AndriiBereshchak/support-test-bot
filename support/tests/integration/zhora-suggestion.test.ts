@@ -32,6 +32,7 @@ vi.mock('@config/env', async (importOriginal) => ({
   ZHORA_OPENROUTER_API_KEY: 'synthetic-suggestion-test-key',
   ZHORA_MODEL_REPLY: 'test/reply',
   ZHORA_MODEL_FIX: 'test/fix',
+  ZHORA_MODEL_BRIEF: 'test/brief',
   ZHORA_MODEL_TRANSLATE: 'test/translate',
 }))
 vi.mock('@apps/services/zhora/context.service', () => ({
@@ -59,6 +60,11 @@ import { generateZhoraTextWithJournal } from '@apps/services/zhora/llm.service'
 import { runZhoraJobPass } from '@apps/services/zhora/job.service'
 import { requestZhoraSuggestion } from '@apps/services/zhora/suggestion.service'
 import { requestZhoraFix } from '@apps/services/zhora/suggestion-fix.service'
+import {
+  parseZhoraBrief,
+  requestZhoraBrief,
+  runZhoraBriefDeliveryPass,
+} from '@apps/services/zhora/brief.service'
 import { requestZhoraSuggestionAlternative } from '@apps/services/zhora/suggestion-alternative.service'
 import { requestZhoraSuggestionVariant } from '@apps/services/zhora/suggestion-variant.service'
 import { runZhoraSuggestionPreviewPass } from '@apps/services/zhora/suggestion-preview.service'
@@ -661,6 +667,256 @@ describe('Zhora /fix drafts', () => {
     expect(vi.mocked(sendPlainMessage).mock.calls[0]![0].text).toContain(
       'Исходное сообщение уже доставлено клиенту'
     )
+  })
+})
+
+describe('Zhora /brief', () => {
+  it('summarizes a ticket in four Russian lines, delivers only to the operator topic, and deduplicates retries', async () => {
+    const { ticket } = await customerMessage('Where is my withdrawal?', 'en')
+    await prismaSupport.supportTicket.update({
+      where: { id: ticket.id },
+      data: { tgChatId: -1002000000001n, tgTopicId: 793 },
+    })
+    await appendMessage({
+      ticketId: ticket.id,
+      direction: 'OUT',
+      text: 'We will check your withdrawal today.',
+    })
+    vi.mocked(generateZhoraTextWithJournal).mockResolvedValue({
+      text: JSON.stringify({
+        request: 'Клиент спрашивает о выводе.',
+        done: 'Проверка ещё не подтверждена.',
+        promised: 'Оператор обещал проверить вывод сегодня.',
+        remaining: 'Проверить статус вывода и ответить клиенту.',
+      }),
+      model: 'test/brief',
+      generationId: null,
+      durationMs: 1,
+      usage: {
+        inputTokens: 1,
+        outputTokens: 1,
+        costUsd: 0,
+        cachedTokens: null,
+        cacheWriteTokens: null,
+      },
+    })
+    const args = {
+      eventKey: `brief:cmd:${randomUUID()}`,
+      ticketId: ticket.id,
+      agentId: null,
+    }
+    const first = await requestZhoraBrief(args)
+    const repeated = await requestZhoraBrief(args)
+    expect(repeated.job.id).toBe(first.job.id)
+    expect(first.job.input).toMatchObject({
+      kind: 'brief',
+      messages: [
+        { author: 'customer', text: 'Where is my withdrawal?' },
+        { author: 'operator', text: 'We will check your withdrawal today.' },
+      ],
+    })
+    await runZhoraJobPass()
+    const completed = await prismaSupport.zhoraJob.findUniqueOrThrow({
+      where: { id: first.job.id },
+    })
+    expect(completed.status).toBe('completed')
+    expect(completed.result).toMatchObject({
+      text: expect.stringContaining('Обещано: Оператор обещал'),
+    })
+    expect(
+      vi.mocked(generateZhoraTextWithJournal).mock.calls[0]![0]
+    ).toMatchObject({
+      operation: 'brief',
+      input: expect.stringContaining('Where is my withdrawal?'),
+    })
+    expect(buildZhoraContext).not.toHaveBeenCalled()
+    await runZhoraBriefDeliveryPass()
+    await runZhoraBriefDeliveryPass()
+    expect(vi.mocked(sendPlainMessage)).toHaveBeenCalledTimes(1)
+    const delivered = vi.mocked(sendPlainMessage).mock.calls[0]![0]
+    expect(delivered.chatId).toBe(-1002000000001)
+    expect(delivered.topicId).toBe(793)
+    expect(delivered.replyMarkup).toBeUndefined()
+    expect(delivered.text.split('\n')).toHaveLength(4)
+    expect(
+      await prismaSupport.supportMessage.count({
+        where: { ticketId: ticket.id, direction: 'OUT' },
+      })
+    ).toBe(1)
+  })
+
+  it('rejects malformed results instead of showing an unsafe summary', () => {
+    expect(() => parseZhoraBrief('{"request":"x"}')).toThrow()
+    expect(() =>
+      parseZhoraBrief(
+        JSON.stringify({
+          request: 'Запрос\nвторая строка',
+          done: 'не указано',
+          promised: 'не указано',
+          remaining: 'не указано',
+        })
+      )
+    ).not.toThrow()
+  })
+
+  it('notifies the operator on invalid output without exposing model text', async () => {
+    const { ticket } = await customerMessage('Question', 'en')
+    await prismaSupport.supportTicket.update({
+      where: { id: ticket.id },
+      data: { tgChatId: -1002000000001n, tgTopicId: 794 },
+    })
+    vi.mocked(generateZhoraTextWithJournal).mockResolvedValue({
+      text: '{"request":"incomplete"}',
+      model: 'test/brief',
+      generationId: null,
+      durationMs: 1,
+      usage: {
+        inputTokens: 1,
+        outputTokens: 1,
+        costUsd: 0,
+        cachedTokens: null,
+        cacheWriteTokens: null,
+      },
+    })
+    const { job } = await requestZhoraBrief({
+      eventKey: `brief:cmd:${randomUUID()}`,
+      ticketId: ticket.id,
+      agentId: null,
+    })
+    await runZhoraJobPass()
+    expect(
+      (
+        await prismaSupport.zhoraJob.findUniqueOrThrow({
+          where: { id: job.id },
+        })
+      ).status
+    ).toBe('failed')
+    await runZhoraBriefDeliveryPass()
+    expect(vi.mocked(sendPlainMessage).mock.calls[0]![0].text).toContain(
+      'Не удалось подготовить краткую сводку'
+    )
+    expect(vi.mocked(sendPlainMessage).mock.calls[0]![0].text).not.toContain(
+      'incomplete'
+    )
+  })
+
+  it('retries a failed Telegram delivery without repeating the AI call', async () => {
+    const { ticket } = await customerMessage('Question', 'en')
+    await prismaSupport.supportTicket.update({
+      where: { id: ticket.id },
+      data: { tgChatId: -1002000000001n, tgTopicId: 795 },
+    })
+    const { job } = await requestZhoraBrief({
+      eventKey: `brief:cmd:${randomUUID()}`,
+      ticketId: ticket.id,
+      agentId: null,
+    })
+    await prismaSupport.zhoraJob.update({
+      where: { id: job.id },
+      data: {
+        status: 'completed',
+        result: {
+          text: 'Запрос: вопрос\nСделано: не указано\nОбещано: не указано\nОсталось: ответить',
+        },
+      },
+    })
+    vi.mocked(sendPlainMessage)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(12345)
+    await runZhoraBriefDeliveryPass()
+    expect(
+      (
+        await prismaSupport.zhoraJob.findUniqueOrThrow({
+          where: { id: job.id },
+        })
+      ).briefSentAt
+    ).toBeNull()
+    await prismaSupport.zhoraJob.update({
+      where: { id: job.id },
+      data: { briefSendingUntil: null },
+    })
+    await runZhoraBriefDeliveryPass()
+    await runZhoraBriefDeliveryPass()
+    expect(vi.mocked(sendPlainMessage)).toHaveBeenCalledTimes(2)
+    expect(
+      (
+        await prismaSupport.zhoraJob.findUniqueOrThrow({
+          where: { id: job.id },
+        })
+      ).briefSentAt
+    ).not.toBeNull()
+    expect(generateZhoraTextWithJournal).not.toHaveBeenCalled()
+  })
+
+  it('processes every part of a long ticket before producing a four-line brief', async () => {
+    const { ticket } = await customerMessage('Question', 'en')
+    for (let index = 0; index < 14; index++) {
+      await appendMessage({
+        ticketId: ticket.id,
+        direction: 'OUT',
+        text:
+          index === 7
+            ? `${index}: ${'x'.repeat(3_000)} PROMISED_MIDDLE`
+            : `${index}: ${'x'.repeat(2_997)}`,
+      })
+    }
+    await appendMessage({
+      ticketId: ticket.id,
+      direction: 'IN',
+      text: `LARGE: ${'a'.repeat(40_000)} :TAIL`,
+    })
+    vi.mocked(generateZhoraTextWithJournal).mockResolvedValue({
+      text: JSON.stringify({
+        request: 'Клиент задал вопрос.',
+        done: 'не указано',
+        promised: 'не указано',
+        remaining: 'Ответить клиенту.',
+      }),
+      model: 'test/brief',
+      generationId: null,
+      durationMs: 1,
+      usage: {
+        inputTokens: 1,
+        outputTokens: 1,
+        costUsd: 0,
+        cachedTokens: null,
+        cacheWriteTokens: null,
+      },
+    })
+    const { job } = await requestZhoraBrief({
+      eventKey: `brief:cmd:${randomUUID()}`,
+      ticketId: ticket.id,
+      agentId: null,
+    })
+    expect(job.input).toMatchObject({
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          text: expect.stringContaining('PROMISED_MIDDLE'),
+        }),
+      ]),
+    })
+    await runZhoraJobPass()
+    const completed = await prismaSupport.zhoraJob.findUniqueOrThrow({
+      where: { id: job.id },
+    })
+    expect(
+      (completed.result as { text: string }).text.split('\n')
+    ).toHaveLength(4)
+    const calls = vi.mocked(generateZhoraTextWithJournal).mock.calls
+    const rawInputs = calls
+      .map(([request]) => request.input)
+      .filter((input) => input.includes('"messages"'))
+      .join(' ')
+    expect(calls.length).toBeGreaterThan(1)
+    expect(rawInputs).toContain('PROMISED_MIDDLE')
+    expect(rawInputs).toContain('LARGE:')
+    expect(rawInputs).toContain(':TAIL')
+    for (let index = 0; index < 14; index++)
+      expect(rawInputs).toContain(`${index}: `)
+    expect(calls.every(([request]) => request.input.length <= 30_000)).toBe(
+      true
+    )
+    expect(calls.at(-1)![0].input).toContain('"summaries"')
   })
 })
 

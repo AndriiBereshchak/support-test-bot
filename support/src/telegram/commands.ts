@@ -54,6 +54,7 @@ import { ApiError } from '@core/errors/api-error'
 import { prepareZhoraInvocation } from './zhora'
 import { requestZhoraSuggestion } from '@apps/services/zhora/suggestion.service'
 import { requestZhoraFix } from '@apps/services/zhora/suggestion-fix.service'
+import { requestZhoraBrief } from '@apps/services/zhora/brief.service'
 
 import {
   deleteTopicMessage,
@@ -97,6 +98,7 @@ const HELP_TEXT = [
   '/del — ответом на сообщение: убрать его и здесь, и у пользователя',
   '/fix <текст> — подготовить исправленный ответ без отправки клиенту',
   '/fix — ответом на своё сообщение: подготовить исправленный вариант',
+  '/brief — краткая сводка тикета для операторов',
   '/me — моя карточка оператора',
   '/setname <имя> — имя, которое видит пользователь',
   '/settitle <текст> — подпись под именем; без текста — убрать',
@@ -309,8 +311,21 @@ export async function handleCommand(
         isBot: ctx.message.from?.is_bot,
       })
       if (!invocation) return
-      // /brief has its own later implementation block.
-      return reply(ctx, 'Эта команда Жоры пока недоступна.')
+      try {
+        await requestZhoraBrief({
+          eventKey: `brief:cmd:${ctx.chatId}:${ctx.message.message_id}`,
+          ticketId: invocation.ticket.id,
+          agentId: invocation.agentId,
+        })
+      } catch (error) {
+        await reply(
+          ctx,
+          error instanceof ApiError
+            ? error.message
+            : 'Не удалось запустить /brief. Попробуйте позже.'
+        )
+      }
+      return
     }
     case 'help':
     case 'start':

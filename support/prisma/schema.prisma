@@ -487,6 +487,9 @@ model ZhoraJob {
   leaseExpiresAt DateTime? @map("lease_expires_at") @db.Timestamptz()
   result         Json?
   errorCode      String?   @map("error_code") @db.VarChar(64)
+  // Operator-only /brief delivery; generation and Telegram delivery are separate.
+  briefSentAt       DateTime? @map("brief_sent_at") @db.Timestamptz()
+  briefSendingUntil DateTime? @map("brief_sending_until") @db.Timestamptz()
   translation    ZhoraTranslation?
   suggestion     ZhoraSuggestion?
 
