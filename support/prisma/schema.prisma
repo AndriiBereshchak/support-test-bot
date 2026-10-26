@@ -516,21 +516,25 @@ model ZhoraTranslation {
   @@map("zhora_translations")
 }
 
-// An operator-requested draft, linked to the customer message and the one
-// paid job. The validated reply and its source labels live in job.result.
+// An operator-requested draft or its translated variant, linked to the
+// customer message and a job. The reply and source labels live in job.result.
 model ZhoraSuggestion {
-  id                  String         @id @default(uuid()) @db.Uuid
-  jobId               String         @unique @map("job_id") @db.Uuid
-  job                 ZhoraJob       @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  targetMessageId     String         @map("target_message_id") @db.Uuid
-  targetMessage       SupportMessage @relation(fields: [targetMessageId], references: [id], onDelete: Cascade)
-  language            String         @db.VarChar(16)
-  previewTgMessageId  Int?           @map("preview_tg_message_id")
-  previewSentAt       DateTime?      @map("preview_sent_at") @db.Timestamptz()
-  previewSendingUntil DateTime?      @map("preview_sending_until") @db.Timestamptz()
-  nextChunkIndex      Int            @default(0) @map("next_chunk_index")
-  createdAt           DateTime       @default(now()) @map("created_at") @db.Timestamptz()
+  id                  String            @id @default(uuid()) @db.Uuid
+  sourceSuggestionId  String?           @map("source_suggestion_id") @db.Uuid
+  sourceSuggestion    ZhoraSuggestion?  @relation("SuggestionVariants", fields: [sourceSuggestionId], references: [id], onDelete: Cascade)
+  variants            ZhoraSuggestion[] @relation("SuggestionVariants")
+  jobId               String            @unique @map("job_id") @db.Uuid
+  job                 ZhoraJob          @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  targetMessageId     String            @map("target_message_id") @db.Uuid
+  targetMessage       SupportMessage    @relation(fields: [targetMessageId], references: [id], onDelete: Cascade)
+  language            String            @db.VarChar(16)
+  previewTgMessageId  Int?              @map("preview_tg_message_id")
+  previewSentAt       DateTime?         @map("preview_sent_at") @db.Timestamptz()
+  previewSendingUntil DateTime?         @map("preview_sending_until") @db.Timestamptz()
+  nextChunkIndex      Int               @default(0) @map("next_chunk_index")
+  createdAt           DateTime          @default(now()) @map("created_at") @db.Timestamptz()
 
+  @@unique([sourceSuggestionId, language])
   @@index([targetMessageId, createdAt])
   @@index([previewSentAt, previewSendingUntil])
   @@map("zhora_suggestions")

@@ -31,6 +31,7 @@ vi.mock('@config/env', async (importOriginal) => ({
   ZHORA_ENABLED: true,
   ZHORA_OPENROUTER_API_KEY: 'synthetic-suggestion-test-key',
   ZHORA_MODEL_REPLY: 'test/reply',
+  ZHORA_MODEL_TRANSLATE: 'test/translate',
 }))
 vi.mock('@apps/services/zhora/context.service', () => ({
   buildZhoraContext: vi.fn(),
@@ -56,6 +57,7 @@ import {
 import { generateZhoraTextWithJournal } from '@apps/services/zhora/llm.service'
 import { runZhoraJobPass } from '@apps/services/zhora/job.service'
 import { requestZhoraSuggestion } from '@apps/services/zhora/suggestion.service'
+import { requestZhoraSuggestionVariant } from '@apps/services/zhora/suggestion-variant.service'
 import { runZhoraSuggestionPreviewPass } from '@apps/services/zhora/suggestion-preview.service'
 import { sendMonospaceMessage, sendPlainMessage } from '@telegram/api'
 
@@ -217,6 +219,7 @@ describe('Zhora answer requests', () => {
               copy_text: { text: 'Proszę podać ID wypłaty.' },
             },
           ],
+          [{ text: 'Перевести', callback_data: `zt:${first.suggestion.id}` }],
         ],
       },
     })
@@ -289,6 +292,7 @@ describe('Zhora answer requests', () => {
     ).toEqual({
       inline_keyboard: [
         [{ text: 'Отправить', callback_data: `zs:${suggestion.id}` }],
+        [{ text: 'Перевести', callback_data: `zt:${suggestion.id}` }],
       ],
     })
     expect(vi.mocked(sendPlainMessage).mock.calls[0]![0].text).toContain(
@@ -348,6 +352,7 @@ describe('Zhora answer requests', () => {
               { text: 'Отправить', callback_data: `zs:${suggestion.id}` },
               { text: 'Скопировать', copy_text: { text: answer } },
             ],
+            [{ text: 'Перевести', callback_data: `zt:${suggestion.id}` }],
           ],
         })
       } else {
@@ -360,6 +365,7 @@ describe('Zhora answer requests', () => {
             replyMarkup: {
               inline_keyboard: [
                 [{ text: 'Отправить', callback_data: `zs:${suggestion.id}` }],
+                [{ text: 'Перевести', callback_data: `zt:${suggestion.id}` }],
               ],
             },
           }
@@ -404,6 +410,7 @@ describe('Zhora answer requests', () => {
     expect(copyCalls[1]!.replyMarkup).toEqual({
       inline_keyboard: [
         [{ text: 'Отправить', callback_data: `zs:${suggestion.id}` }],
+        [{ text: 'Перевести', callback_data: `zt:${suggestion.id}` }],
       ],
     })
     expect(
@@ -474,5 +481,146 @@ describe('Zhora answer requests', () => {
     const ready = await requestZhoraSuggestion(args)
     expect(ready.suggestion.language).toBe('pl')
     expect(ready.suggestion.targetMessageId).toBe(message.id)
+  })
+})
+
+async function completedSource() {
+  const { ticket } = await customerMessage('Question', 'en')
+  await prismaSupport.supportTicket.update({
+    where: { id: ticket.id },
+    data: { tgChatId: -1002000000001n, tgTopicId: 782 },
+  })
+  const { suggestion } = await requestZhoraSuggestion({
+    ticketId: ticket.id,
+    eventKey: `reply:translation:${randomUUID()}`,
+  })
+  await prismaSupport.zhoraJob.update({
+    where: { id: suggestion.jobId },
+    data: {
+      status: 'completed',
+      result: {
+        answer: 'Please provide your ID.',
+        answerRu: 'Пожалуйста, укажите ваш ID.',
+        needsReview: true,
+        sources: [{ code: 'TEST_1', question: 'Identity' }],
+      },
+    },
+  })
+  await prismaSupport.zhoraSuggestion.update({
+    where: { id: suggestion.id },
+    data: { previewSentAt: new Date(), previewTgMessageId: 4321 },
+  })
+  return { ticket, suggestion }
+}
+
+describe('Zhora translated variants', () => {
+  it('reuses the RU text without a paid job and keeps the ticket language', async () => {
+    const { ticket, suggestion } = await completedSource()
+    const first = await requestZhoraSuggestionVariant({
+      sourceSuggestionId: suggestion.id,
+      language: 'ru',
+      agentId: null,
+    })
+    const repeated = await requestZhoraSuggestionVariant({
+      sourceSuggestionId: suggestion.id,
+      language: 'ru',
+      agentId: null,
+    })
+    expect(first.created).toBe(true)
+    expect(repeated).toMatchObject({
+      created: false,
+      suggestion: { id: first.suggestion.id },
+    })
+    const job = await prismaSupport.zhoraJob.findUniqueOrThrow({
+      where: { id: first.suggestion.jobId },
+    })
+    expect(job.status).toBe('completed')
+    expect(job.callId).toBeNull()
+    expect(job.result).toMatchObject({
+      answer: 'Пожалуйста, укажите ваш ID.',
+      answerRu: 'Пожалуйста, укажите ваш ID.',
+      sources: [{ code: 'TEST_1', question: 'Identity' }],
+    })
+    await runZhoraSuggestionPreviewPass()
+    expect(vi.mocked(sendPlainMessage).mock.calls[0]![0]).toMatchObject({
+      text: expect.stringContaining('Жора — перевод (ru)'),
+      replyMarkup: {
+        inline_keyboard: [
+          [
+            { text: 'Отправить', callback_data: `zs:${first.suggestion.id}` },
+            {
+              text: 'Скопировать',
+              copy_text: { text: 'Пожалуйста, укажите ваш ID.' },
+            },
+          ],
+        ],
+      },
+    })
+    expect(generateZhoraTextWithJournal).not.toHaveBeenCalled()
+    expect(
+      (
+        await prismaSupport.supportTicket.findUniqueOrThrow({
+          where: { id: ticket.id },
+        })
+      ).detectedLang
+    ).toBe('en')
+  })
+
+  it('queues one translated variant and saves the model text for preview', async () => {
+    const { ticket, suggestion } = await completedSource()
+    const first = await requestZhoraSuggestionVariant({
+      sourceSuggestionId: suggestion.id,
+      language: 'de',
+      agentId: null,
+    })
+    const repeated = await requestZhoraSuggestionVariant({
+      sourceSuggestionId: suggestion.id,
+      language: 'de',
+      agentId: null,
+    })
+    expect(repeated.suggestion.id).toBe(first.suggestion.id)
+    expect(first.suggestion.sourceSuggestionId).toBe(suggestion.id)
+    vi.mocked(generateZhoraTextWithJournal).mockResolvedValue({
+      text: JSON.stringify({ answer: 'Bitte nennen Sie Ihre ID.' }),
+      model: 'test/translate',
+      generationId: null,
+      durationMs: 1,
+      usage: {
+        inputTokens: 1,
+        outputTokens: 1,
+        costUsd: 0,
+        cachedTokens: null,
+        cacheWriteTokens: null,
+      },
+    })
+    await runZhoraJobPass()
+    expect(generateZhoraTextWithJournal).toHaveBeenCalledTimes(1)
+    expect(
+      vi.mocked(generateZhoraTextWithJournal).mock.calls[0]![0]
+    ).toMatchObject({
+      operation: 'translate',
+      input: expect.stringContaining('German'),
+    })
+    const job = await prismaSupport.zhoraJob.findUniqueOrThrow({
+      where: { id: first.suggestion.jobId },
+    })
+    expect(job.status).toBe('completed')
+    expect(job.result).toMatchObject({
+      answer: 'Bitte nennen Sie Ihre ID.',
+      answerRu: 'Пожалуйста, укажите ваш ID.',
+      needsReview: true,
+      sources: [{ code: 'TEST_1', question: 'Identity' }],
+    })
+    await runZhoraSuggestionPreviewPass()
+    expect(vi.mocked(sendPlainMessage).mock.calls[0]![0].text).toContain(
+      'Жора — перевод (de)'
+    )
+    expect(
+      (
+        await prismaSupport.supportTicket.findUniqueOrThrow({
+          where: { id: ticket.id },
+        })
+      ).detectedLang
+    ).toBe('en')
   })
 })

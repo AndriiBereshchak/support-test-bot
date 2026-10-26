@@ -4,6 +4,7 @@ import {
   sendMonospaceMessage,
   sendPlainMessage,
   ZHORA_SEND_CALLBACK_PREFIX,
+  ZHORA_TRANSLATE_CALLBACK_PREFIX,
 } from '@telegram/api'
 import { splitText, TELEGRAM_TEXT_LIMIT } from '@telegram/text'
 
@@ -26,7 +27,7 @@ function exactCopyChunks(answer: string): string[] {
   return chunks
 }
 
-function previewText(result: unknown): string {
+function previewText(result: unknown, language?: string): string {
   if (!result || typeof result !== 'object')
     throw new Error('invalid_suggestion_result')
   const value = result as Record<string, unknown>
@@ -52,7 +53,7 @@ function previewText(result: unknown): string {
     return `KB ${code}«${question}»`
   })
   return [
-    'Жора — черновик ответа',
+    language ? `Жора — перевод (${language})` : 'Жора — черновик ответа',
     value.answer,
     `RU: ${value.answerRu}`,
     sources.length
@@ -107,7 +108,10 @@ export async function runZhoraSuggestionPreviewPass(): Promise<void> {
     let answer: string | null = null
     if (row.job.status === 'completed') {
       try {
-        body = previewText(row.job.result)
+        body = previewText(
+          row.job.result,
+          row.sourceSuggestionId ? row.language : undefined
+        )
         answer = (row.job.result as { answer: string }).answer
       } catch {
         logger.warn('[zhora] completed suggestion has invalid result')
@@ -137,6 +141,16 @@ export async function runZhoraSuggestionPreviewPass(): Promise<void> {
                       ? []
                       : [{ text: 'Скопировать', copy_text: { text: answer } }]),
                   ],
+                  ...(row.sourceSuggestionId
+                    ? []
+                    : [
+                        [
+                          {
+                            text: 'Перевести',
+                            callback_data: `${ZHORA_TRANSLATE_CALLBACK_PREFIX}${row.id}`,
+                          },
+                        ],
+                      ]),
                 ],
               }
             : undefined

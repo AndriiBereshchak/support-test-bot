@@ -22,6 +22,7 @@ import {
 } from './openrouter'
 import { runZhoraTranslationPass } from './translation.service'
 import { generateZhoraSuggestion } from './suggestion.service'
+import { generateZhoraSuggestionVariant } from './suggestion-variant.service'
 import { runZhoraSuggestionPreviewPass } from './suggestion-preview.service'
 export { enqueueZhoraJob } from './job-enqueue.service'
 
@@ -124,11 +125,17 @@ async function executeJob(job: ZhoraJob): Promise<void> {
             !Array.isArray(job.input) &&
             job.input.kind === 'suggestion'
           ? await generateZhoraSuggestion(job)
-          : await generateZhoraTextWithJournal(readInput(job), {
-              ticketId: job.ticketId,
-              agentId: job.agentId,
-              jobId: job.id,
-            })
+          : job.operation === 'translate' &&
+              typeof job.input === 'object' &&
+              job.input !== null &&
+              !Array.isArray(job.input) &&
+              job.input.kind === 'suggestion-translation'
+            ? await generateZhoraSuggestionVariant(job)
+            : await generateZhoraTextWithJournal(readInput(job), {
+                ticketId: job.ticketId,
+                agentId: job.agentId,
+                jobId: job.id,
+              })
   } catch (error) {
     const code =
       error instanceof ZhoraBudgetError || error instanceof OpenRouterError

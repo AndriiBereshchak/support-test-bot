@@ -10,6 +10,7 @@ vi.mock('@config/env', async (importOriginal) => ({
   },
   ZHORA_OPENROUTER_API_KEY: 'synthetic-telegram-test-key',
   ZHORA_MODEL_REPLY: 'test/reply',
+  ZHORA_MODEL_TRANSLATE: 'test/translate',
 }))
 vi.mock('@apps/services/push.service', () => ({ pushToUser: vi.fn() }))
 vi.mock('@telegram/api', async (importOriginal) => ({
@@ -20,7 +21,13 @@ vi.mock('@telegram/api', async (importOriginal) => ({
 import { prismaSupport } from '@config/database'
 import { pushToUser } from '@apps/services/push.service'
 import * as chat from '@apps/services/chat.service'
+import { runZhoraSuggestionPreviewPass } from '@apps/services/zhora/suggestion-preview.service'
 import { prepareZhoraInvocation } from '@telegram/zhora'
+import { handleZhoraSendCallback } from '@telegram/zhora-send'
+import {
+  handleZhoraTranslationMenu,
+  handleZhoraTranslationSelection,
+} from '@telegram/zhora-translate'
 import { handleUpdate } from '@telegram/updates'
 import * as telegram from '@telegram/api'
 import { cleanupTestUser, createTestUser, type TestUser } from './_helpers'
@@ -521,4 +528,120 @@ describe('Zhora operator-approved sending', () => {
       expect(telegram.answerCallback).toHaveBeenCalledTimes(1)
     }
   )
+})
+
+describe('Zhora translation buttons', () => {
+  it('offers 11 languages, then sends only the selected saved variant', async () => {
+    const { suggestion } = await readyDraft()
+    await handleZhoraTranslationMenu({
+      ...invocation(),
+      suggestionId: suggestion.id,
+      previewMessageId: suggestion.previewTgMessageId!,
+    })
+    const menu = sent().mock.calls.at(-1)![0]
+    expect(menu.text).toContain('Выберите язык')
+    const buttons = menu.replyMarkup!.inline_keyboard.flat()
+    expect(buttons.map((button) => button.text)).toEqual([
+      'en',
+      'ru',
+      'ua',
+      'de',
+      'es',
+      'fr',
+      'hi',
+      'tr',
+      'ar',
+      'cs',
+      'it',
+    ])
+    expect(buttons.find((button) => button.text === 'de')).toMatchObject({
+      callback_data: `ztl:${suggestion.id}:de`,
+    })
+    await handleZhoraTranslationSelection({
+      ...invocation(),
+      suggestionId: suggestion.id,
+      language: 'de',
+    })
+    const variant = await prismaSupport.zhoraSuggestion.findFirstOrThrow({
+      where: { sourceSuggestionId: suggestion.id, language: 'de' },
+    })
+    await prismaSupport.zhoraJob.update({
+      where: { id: variant.jobId },
+      data: {
+        status: 'completed',
+        result: {
+          answer: 'Bitte nennen Sie Ihre ID.',
+          answerRu: 'Укажите ID вывода.',
+          sources: [],
+          needsReview: true,
+        },
+      },
+    })
+    await runZhoraSuggestionPreviewPass()
+    const ready = await prismaSupport.zhoraSuggestion.findUniqueOrThrow({
+      where: { id: variant.id },
+    })
+    expect(ready.previewTgMessageId).toBeTruthy()
+    expect(await outgoing()).toHaveLength(0)
+    expect(sent().mock.calls.at(-1)![0]).toMatchObject({
+      text: expect.stringContaining('RU: Укажите ID вывода.'),
+      replyMarkup: {
+        inline_keyboard: [
+          [
+            { text: 'Отправить', callback_data: `zs:${variant.id}` },
+            {
+              text: 'Скопировать',
+              copy_text: { text: 'Bitte nennen Sie Ihre ID.' },
+            },
+          ],
+        ],
+      },
+    })
+    await handleZhoraSendCallback({
+      ...invocation(),
+      suggestionId: variant.id,
+      previewMessageId: ready.previewTgMessageId!,
+    })
+    expect(await outgoing()).toMatchObject([
+      { text: 'Bitte nennen Sie Ihre ID.' },
+    ])
+    expect(pushToUser).toHaveBeenCalledTimes(1)
+    expect(
+      await prismaSupport.zhoraSuggestion.count({
+        where: { sourceSuggestionId: suggestion.id },
+      })
+    ).toBe(1)
+    expect(
+      (
+        await prismaSupport.supportTicket.findUniqueOrThrow({
+          where: { id: ticket.id },
+        })
+      ).detectedLang
+    ).toBeNull()
+  })
+
+  it('rejects a menu tap on another preview and a selection in a closed ticket', async () => {
+    const { suggestion } = await readyDraft()
+    await handleZhoraTranslationMenu({
+      ...invocation(),
+      suggestionId: suggestion.id,
+      previewMessageId: suggestion.previewTgMessageId! + 1,
+    })
+    expect(sent().mock.calls.at(-1)![0].text).toContain('недоступен')
+    await prismaSupport.supportTicket.update({
+      where: { id: ticket.id },
+      data: { status: 'CLOSED' },
+    })
+    await handleZhoraTranslationSelection({
+      ...invocation(),
+      suggestionId: suggestion.id,
+      language: 'ru',
+    })
+    expect(
+      await prismaSupport.zhoraSuggestion.count({
+        where: { sourceSuggestionId: suggestion.id },
+      })
+    ).toBe(0)
+    expect(pushToUser).not.toHaveBeenCalled()
+  })
 })
