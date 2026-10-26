@@ -224,6 +224,7 @@ describe('Zhora answer requests', () => {
             { text: 'Перевести', callback_data: `zt:${first.suggestion.id}` },
             { text: 'Ещё вариант', callback_data: `za:${first.suggestion.id}` },
           ],
+          [{ text: 'Карточка', callback_data: `zc:${first.suggestion.id}` }],
         ],
       },
     })
@@ -300,6 +301,7 @@ describe('Zhora answer requests', () => {
           { text: 'Перевести', callback_data: `zt:${suggestion.id}` },
           { text: 'Ещё вариант', callback_data: `za:${suggestion.id}` },
         ],
+        [{ text: 'Карточка', callback_data: `zc:${suggestion.id}` }],
       ],
     })
     expect(vi.mocked(sendPlainMessage).mock.calls[0]![0].text).toContain(
@@ -363,6 +365,7 @@ describe('Zhora answer requests', () => {
               { text: 'Перевести', callback_data: `zt:${suggestion.id}` },
               { text: 'Ещё вариант', callback_data: `za:${suggestion.id}` },
             ],
+            [{ text: 'Карточка', callback_data: `zc:${suggestion.id}` }],
           ],
         })
       } else {
@@ -379,6 +382,7 @@ describe('Zhora answer requests', () => {
                   { text: 'Перевести', callback_data: `zt:${suggestion.id}` },
                   { text: 'Ещё вариант', callback_data: `za:${suggestion.id}` },
                 ],
+                [{ text: 'Карточка', callback_data: `zc:${suggestion.id}` }],
               ],
             },
           }
@@ -427,6 +431,7 @@ describe('Zhora answer requests', () => {
           { text: 'Перевести', callback_data: `zt:${suggestion.id}` },
           { text: 'Ещё вариант', callback_data: `za:${suggestion.id}` },
         ],
+        [{ text: 'Карточка', callback_data: `zc:${suggestion.id}` }],
       ],
     })
     expect(
@@ -569,6 +574,7 @@ describe('Zhora translated variants', () => {
               copy_text: { text: 'Пожалуйста, укажите ваш ID.' },
             },
           ],
+          [{ text: 'Карточка', callback_data: `zc:${first.suggestion.id}` }],
         ],
       },
     })
@@ -738,6 +744,7 @@ describe('Zhora alternative drafts', () => {
               callback_data: `za:${first.suggestion.id}`,
             },
           ],
+          [{ text: 'Карточка', callback_data: `zc:${first.suggestion.id}` }],
         ],
       },
     })

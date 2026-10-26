@@ -531,6 +531,49 @@ describe('Zhora operator-approved sending', () => {
   )
 })
 
+describe('Zhora card quick action', () => {
+  it('shows the current ticket card to the operator without sending a customer reply', async () => {
+    const { suggestion } = await readyDraft()
+    settings.enabled = false // /info remains available even when AI is paused.
+    const update = callbackUpdate({
+      topicId: ticket.tgTopicId!,
+      messageId: suggestion.previewTgMessageId!,
+      fromId,
+      data: `${telegram.ZHORA_CARD_CALLBACK_PREFIX}${suggestion.id}`,
+    })
+    await handleUpdate(update)
+    expect(vi.mocked(telegram.sendToTopic)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(telegram.sendToTopic).mock.calls[0]![0]).toMatchObject({
+      chatId: TEST_CHAT_ID,
+      topicId: ticket.tgTopicId,
+      text: expect.stringContaining(user.userNId.toString()),
+    })
+    expect(await outgoing()).toHaveLength(0)
+    expect(pushToUser).not.toHaveBeenCalled()
+  })
+
+  it('rejects a stale preview or a button used in another topic', async () => {
+    const { suggestion } = await readyDraft()
+    const invalidButtons: Array<[number, number]> = [
+      [ticket.tgTopicId!, suggestion.previewTgMessageId! + 1],
+      [ticket.tgTopicId! + 1, suggestion.previewTgMessageId!],
+    ]
+    for (const [topicId, messageId] of invalidButtons) {
+      await handleUpdate(
+        callbackUpdate({
+          topicId,
+          messageId,
+          fromId,
+          data: `${telegram.ZHORA_CARD_CALLBACK_PREFIX}${suggestion.id}`,
+        })
+      )
+    }
+    expect(vi.mocked(telegram.sendToTopic)).not.toHaveBeenCalled()
+    expect(sent()).toHaveBeenCalledTimes(2)
+    expect(await outgoing()).toHaveLength(0)
+  })
+})
+
 describe('Zhora translation buttons', () => {
   it('offers 11 languages, then sends only the selected saved variant', async () => {
     const { suggestion } = await readyDraft()
@@ -595,6 +638,7 @@ describe('Zhora translation buttons', () => {
               copy_text: { text: 'Bitte nennen Sie Ihre ID.' },
             },
           ],
+          [{ text: 'Карточка', callback_data: `zc:${variant.id}` }],
         ],
       },
     })

@@ -30,6 +30,7 @@ import {
   ZHORA_REPLY_CALLBACK_PREFIX,
   ZHORA_SEND_CALLBACK_PREFIX,
   ZHORA_ALTERNATIVE_CALLBACK_PREFIX,
+  ZHORA_CARD_CALLBACK_PREFIX,
   ZHORA_TRANSLATE_CALLBACK_PREFIX,
   ZHORA_TRANSLATE_LANGUAGE_CALLBACK_PREFIX,
 } from '@telegram/api'
@@ -48,6 +49,7 @@ import {
 } from './commands'
 import { handleZhoraSendCallback } from './zhora-send'
 import { handleZhoraAlternativeCallback } from './zhora-alternative'
+import { handleZhoraCardCallback } from './zhora-card'
 import {
   handleZhoraTranslationMenu,
   handleZhoraTranslationSelection,
@@ -130,6 +132,25 @@ async function onCallbackQuery(query: CallbackQuery): Promise<void> {
   const message = query.message
   if (!message) return
   if (message.chat.id !== Number(TELEGRAM_CHAT_ID)) return
+
+  if (data.startsWith(ZHORA_CARD_CALLBACK_PREFIX)) {
+    const suggestionId = data.slice(ZHORA_CARD_CALLBACK_PREFIX.length)
+    if (
+      !/^[0-9a-f-]{36}$/i.test(suggestionId) ||
+      query.from.is_bot ||
+      !message.is_topic_message ||
+      !message.message_thread_id ||
+      message.message_thread_id <= 1
+    )
+      return
+    await handleZhoraCardCallback({
+      chatId: message.chat.id,
+      topicId: message.message_thread_id,
+      suggestionId,
+      previewMessageId: message.message_id,
+    })
+    return
+  }
 
   if (data.startsWith(ZHORA_ALTERNATIVE_CALLBACK_PREFIX)) {
     const suggestionId = data.slice(ZHORA_ALTERNATIVE_CALLBACK_PREFIX.length)

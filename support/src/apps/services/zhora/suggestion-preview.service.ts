@@ -4,6 +4,7 @@ import {
   sendMonospaceMessage,
   sendPlainMessage,
   ZHORA_ALTERNATIVE_CALLBACK_PREFIX,
+  ZHORA_CARD_CALLBACK_PREFIX,
   ZHORA_SEND_CALLBACK_PREFIX,
   ZHORA_TRANSLATE_CALLBACK_PREFIX,
 } from '@telegram/api'
@@ -167,6 +168,12 @@ export async function runZhoraSuggestionPreviewPass(): Promise<void> {
                           },
                         ],
                       ]),
+                  [
+                    {
+                      text: 'Карточка',
+                      callback_data: `${ZHORA_CARD_CALLBACK_PREFIX}${row.id}`,
+                    },
+                  ],
                 ],
               }
             : undefined

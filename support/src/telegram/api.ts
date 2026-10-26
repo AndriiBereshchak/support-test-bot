@@ -94,6 +94,7 @@ export const ZHORA_SEND_CALLBACK_PREFIX = 'zs:'
 export const ZHORA_TRANSLATE_CALLBACK_PREFIX = 'zt:'
 export const ZHORA_TRANSLATE_LANGUAGE_CALLBACK_PREFIX = 'ztl:'
 export const ZHORA_ALTERNATIVE_CALLBACK_PREFIX = 'za:'
+export const ZHORA_CARD_CALLBACK_PREFIX = 'zc:'
 
 /** Put the request action on a bot-authored copy of the customer message. */
 export async function attachZhoraReplyButton(args: {

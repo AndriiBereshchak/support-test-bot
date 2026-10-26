@@ -262,7 +262,7 @@ export function callbackUpdate(input: {
         message_thread_id: input.topicId,
         is_topic_message: true,
         date: Math.floor(Date.now() / 1000),
-        chat: SUPPORT_GROUP,
+        chat: { ...SUPPORT_GROUP },
       },
     },
   }

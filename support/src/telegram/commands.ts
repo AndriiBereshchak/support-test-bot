@@ -509,14 +509,27 @@ async function commandInfo(ctx: CommandContext): Promise<void> {
   const found = await userOfTopic(ctx, 'info')
   if (!found) return
 
-  const card = await getUserCard(found.ticket.userId)
+  await sendTicketCard({
+    chatId: ctx.chatId,
+    topicId: found.topicId,
+    ticket: found.ticket,
+  })
+}
+
+/** The same fresh operator card for /info and Zhora's quick action. */
+export async function sendTicketCard(args: {
+  chatId: number
+  topicId: number
+  ticket: Pick<SupportTicket, 'id' | 'userId'>
+}): Promise<void> {
+  const card = await getUserCard(args.ticket.userId)
   // The real ticket id, not a synthetic string: the card prints it inside
   // <code>, i.e. it is copied by a tap, and a fake one would send the operator
   // looking for a ticket that does not exist.
   await sendToTopic({
-    chatId: ctx.chatId,
-    topicId: found.topicId,
-    text: renderUserCard(card, found.ticket.id),
+    chatId: args.chatId,
+    topicId: args.topicId,
+    text: renderUserCard(card, args.ticket.id),
   })
 }
 
