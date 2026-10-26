@@ -23,6 +23,7 @@ import { pushToUser } from '@apps/services/push.service'
 import * as chat from '@apps/services/chat.service'
 import { runZhoraSuggestionPreviewPass } from '@apps/services/zhora/suggestion-preview.service'
 import { prepareZhoraInvocation } from '@telegram/zhora'
+import { handleZhoraAlternativeCallback } from '@telegram/zhora-alternative'
 import { handleZhoraSendCallback } from '@telegram/zhora-send'
 import {
   handleZhoraTranslationMenu,
@@ -643,5 +644,84 @@ describe('Zhora translation buttons', () => {
       })
     ).toBe(0)
     expect(pushToUser).not.toHaveBeenCalled()
+  })
+})
+
+describe('Zhora alternative button', () => {
+  it('keeps the original draft and sends only the alternative explicitly chosen', async () => {
+    const { suggestion } = await readyDraft()
+    const callbackId = `synthetic:${randomUUID()}`
+    const tap = (id: string) =>
+      handleZhoraAlternativeCallback({
+        ...invocation(),
+        suggestionId: suggestion.id,
+        previewMessageId: suggestion.previewTgMessageId!,
+        callbackId: id,
+      })
+    await tap(callbackId)
+    await tap(callbackId)
+    const jobs = await prismaSupport.zhoraJob.findMany({
+      where: {
+        ticketId: ticket.id,
+        input: { path: ['kind'], equals: 'suggestion-alternative' },
+      },
+      include: { suggestion: true },
+    })
+    expect(jobs).toHaveLength(1)
+    expect(jobs[0]!.suggestion!.id).not.toBe(suggestion.id)
+    expect(await outgoing()).toHaveLength(0)
+
+    await prismaSupport.zhoraJob.update({
+      where: { id: jobs[0]!.id },
+      data: {
+        status: 'completed',
+        result: {
+          answer: 'Could you share your withdrawal ID, please?',
+          answerRu: 'Пожалуйста, сообщите ID вывода.',
+          sources: [],
+          needsReview: true,
+        },
+      },
+    })
+    await runZhoraSuggestionPreviewPass()
+    const alternative = await prismaSupport.zhoraSuggestion.findUniqueOrThrow({
+      where: { id: jobs[0]!.suggestion!.id },
+    })
+    await handleZhoraSendCallback({
+      ...invocation(),
+      suggestionId: alternative.id,
+      previewMessageId: alternative.previewTgMessageId!,
+    })
+    expect(await outgoing()).toMatchObject([
+      { text: 'Could you share your withdrawal ID, please?' },
+    ])
+    expect(pushToUser).toHaveBeenCalledTimes(1)
+    expect(
+      (
+        await prismaSupport.zhoraJob.findUniqueOrThrow({
+          where: { id: suggestion.jobId },
+        })
+      ).result
+    ).toMatchObject({ answer: 'Please provide the withdrawal ID.' })
+  })
+
+  it('rejects a tap under another preview message', async () => {
+    const { suggestion } = await readyDraft()
+    await handleZhoraAlternativeCallback({
+      ...invocation(),
+      suggestionId: suggestion.id,
+      previewMessageId: suggestion.previewTgMessageId! + 1,
+      callbackId: `synthetic:${randomUUID()}`,
+    })
+    expect(sent().mock.calls.at(-1)![0].text).toContain('недоступен')
+    expect(
+      await prismaSupport.zhoraJob.count({
+        where: {
+          ticketId: ticket.id,
+          input: { path: ['kind'], equals: 'suggestion-alternative' },
+        },
+      })
+    ).toBe(0)
+    expect(await outgoing()).toHaveLength(0)
   })
 })

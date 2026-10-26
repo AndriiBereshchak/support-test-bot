@@ -22,6 +22,42 @@ export interface ZhoraInvocationInput {
   messageId?: string
 }
 
+/** Validate a button on an original or reworded draft before requesting work. */
+export async function prepareZhoraDraftAction(
+  input: ZhoraInvocationInput & {
+    suggestionId: string
+    previewMessageId?: number
+  }
+) {
+  const suggestion = await prismaSupport.zhoraSuggestion.findUnique({
+    where: { id: input.suggestionId },
+    select: {
+      id: true,
+      sourceSuggestionId: true,
+      previewSentAt: true,
+      previewTgMessageId: true,
+      targetMessageId: true,
+      targetMessage: { select: { ticketId: true } },
+      job: { select: { status: true } },
+    },
+  })
+  if (
+    !suggestion ||
+    suggestion.sourceSuggestionId ||
+    !suggestion.previewSentAt ||
+    suggestion.job.status !== 'completed' ||
+    (input.previewMessageId !== undefined &&
+      suggestion.previewTgMessageId !== input.previewMessageId)
+  )
+    throw new ApiError('Черновик недоступен.', 409)
+  const prepared = await prepareZhoraInvocation({
+    ...input,
+    ticketId: suggestion.targetMessage.ticketId,
+    messageId: suggestion.targetMessageId,
+  })
+  return prepared ? { suggestion, prepared } : null
+}
+
 /** Common command/callback preflight. Only reads local state and can reply to
  * the operator. No ticket creation, paid calls or customer message delivery. */
 export async function prepareZhoraInvocation(input: ZhoraInvocationInput) {

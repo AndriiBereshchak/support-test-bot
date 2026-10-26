@@ -1,4 +1,4 @@
-import { randomInt } from 'node:crypto'
+import { randomInt, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -19,6 +19,9 @@ vi.mock('@telegram/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@telegram/api')>()),
   ...(await import('./_telegram-stub')).telegramStub(),
 }))
+vi.mock('@telegram/zhora-alternative', () => ({
+  handleZhoraAlternativeCallback: vi.fn(),
+}))
 
 import { prismaSupport, shutdownPrisma } from '@config/database'
 import { SUPPORT_FILES_DIR } from '@config/env'
@@ -30,6 +33,7 @@ import { pushToUser } from '@apps/services/push.service'
 
 import * as telegram from '@telegram/api'
 import { handleUpdate } from '@telegram/updates'
+import { handleZhoraAlternativeCallback } from '@telegram/zhora-alternative'
 
 import { MP4_BYTES, PNG_BYTES } from '../fixtures/bytes'
 import {
@@ -45,6 +49,7 @@ import {
   agentEditUpdate,
   agentMediaUpdate,
   agentMessageUpdate,
+  callbackUpdate,
   generalMessageUpdate,
 } from './_telegram-stub'
 
@@ -74,6 +79,25 @@ beforeEach(() => {
 
 afterAll(async () => {
   await shutdownPrisma()
+})
+
+it('routes an alternative callback with the exact preview and event IDs', async () => {
+  const suggestionId = randomUUID()
+  const update = callbackUpdate({
+    topicId: 4242,
+    messageId: 5252,
+    fromId: 777001,
+    data: `za:${suggestionId}`,
+  })
+  await handleUpdate(update)
+  expect(handleZhoraAlternativeCallback).toHaveBeenCalledWith({
+    chatId: TEST_CHAT_ID,
+    topicId: 4242,
+    fromId: 777001,
+    suggestionId,
+    previewMessageId: 5252,
+    callbackId: update.callback_query!.id,
+  })
 })
 
 /** A user with an open, topic-bound ticket — the normal state of a live chat. */

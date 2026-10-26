@@ -3,6 +3,7 @@ import { logger } from '@config/logger'
 import {
   sendMonospaceMessage,
   sendPlainMessage,
+  ZHORA_ALTERNATIVE_CALLBACK_PREFIX,
   ZHORA_SEND_CALLBACK_PREFIX,
   ZHORA_TRANSLATE_CALLBACK_PREFIX,
 } from '@telegram/api'
@@ -27,7 +28,10 @@ function exactCopyChunks(answer: string): string[] {
   return chunks
 }
 
-function previewText(result: unknown, language?: string): string {
+function previewText(
+  result: unknown,
+  options: { language?: string; alternative?: boolean } = {}
+): string {
   if (!result || typeof result !== 'object')
     throw new Error('invalid_suggestion_result')
   const value = result as Record<string, unknown>
@@ -53,7 +57,11 @@ function previewText(result: unknown, language?: string): string {
     return `KB ${code}«${question}»`
   })
   return [
-    language ? `Жора — перевод (${language})` : 'Жора — черновик ответа',
+    options.language
+      ? `Жора — перевод (${options.language})`
+      : options.alternative
+        ? 'Жора — ещё вариант ответа'
+        : 'Жора — черновик ответа',
     value.answer,
     `RU: ${value.answerRu}`,
     sources.length
@@ -76,7 +84,7 @@ export async function runZhoraSuggestionPreviewPass(): Promise<void> {
       },
     },
     include: {
-      job: { select: { status: true, result: true } },
+      job: { select: { status: true, result: true, input: true } },
       targetMessage: {
         select: {
           tgMessageId: true,
@@ -108,10 +116,14 @@ export async function runZhoraSuggestionPreviewPass(): Promise<void> {
     let answer: string | null = null
     if (row.job.status === 'completed') {
       try {
-        body = previewText(
-          row.job.result,
-          row.sourceSuggestionId ? row.language : undefined
-        )
+        body = previewText(row.job.result, {
+          ...(row.sourceSuggestionId ? { language: row.language } : {}),
+          alternative:
+            row.job.input !== null &&
+            typeof row.job.input === 'object' &&
+            !Array.isArray(row.job.input) &&
+            row.job.input.kind === 'suggestion-alternative',
+        })
         answer = (row.job.result as { answer: string }).answer
       } catch {
         logger.warn('[zhora] completed suggestion has invalid result')
@@ -148,6 +160,10 @@ export async function runZhoraSuggestionPreviewPass(): Promise<void> {
                           {
                             text: 'Перевести',
                             callback_data: `${ZHORA_TRANSLATE_CALLBACK_PREFIX}${row.id}`,
+                          },
+                          {
+                            text: 'Ещё вариант',
+                            callback_data: `${ZHORA_ALTERNATIVE_CALLBACK_PREFIX}${row.id}`,
                           },
                         ],
                       ]),
