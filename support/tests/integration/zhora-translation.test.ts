@@ -52,10 +52,11 @@ import {
   parseTranslation,
   runZhoraTranslationPass,
 } from '@apps/services/zhora/translation.service'
-import { sendPlainMessage } from '@telegram/api'
+import { attachZhoraReplyButton, sendPlainMessage } from '@telegram/api'
 
 const generate = vi.mocked(generateZhoraTextWithJournal)
 const sent = vi.mocked(sendPlainMessage)
+const attachReplyButton = vi.mocked(attachZhoraReplyButton)
 
 beforeAll(() => {
   const cli = path.join(
@@ -155,6 +156,7 @@ describe('incoming Zhora translation', () => {
     await runZhoraTranslationPass()
     expect(generate).toHaveBeenCalledTimes(1)
     expect(sent).toHaveBeenCalledTimes(1)
+    expect(attachReplyButton).not.toHaveBeenCalled()
 
     const second = await appendMessage({
       ticketId: ticket.id,
