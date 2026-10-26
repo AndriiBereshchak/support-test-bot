@@ -30,6 +30,8 @@ export interface AppendMessageInput {
   dedupeKey?: string | null
   /** Staged attachment rows to bind to this message. */
   attachmentIds?: string[]
+  /** Create a durable AI translation task with this customer message. */
+  translationPending?: boolean
   /**
    * Refuse the append unless the ticket is still OPEN, checked inside the same
    * locked write that allocates `seq` — so no `/close` can slip in between.
@@ -140,6 +142,12 @@ export async function appendMessage(
           dedupeKey,
         },
       })
+
+      if (input.translationPending && direction === 'IN') {
+        await tx.zhoraTranslation.create({
+          data: { messageId: created.id },
+        })
+      }
 
       if (attachmentIds.length) {
         // Scoped to this ticket on purpose: an attachment id from another

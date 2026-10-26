@@ -15,11 +15,12 @@ import {
   temporaryDatabaseError,
 } from './llm.service'
 import {
-  getZhoraModel,
   OpenRouterError,
   type OpenRouterInput,
   type ZhoraOperation,
 } from './openrouter'
+import { runZhoraTranslationPass } from './translation.service'
+export { enqueueZhoraJob } from './job-enqueue.service'
 
 // Technical scheduling defaults, not product limits. One job at a time per
 // worker process; PostgreSQL arbitrates claims between worker replicas.
@@ -27,52 +28,6 @@ const POLL_INTERVAL_MS = 1000
 const LEASE_MS = 60_000
 const HEARTBEAT_MS = 15_000
 const KB_DISCOVERY_INTERVAL_MS = 15 * 60_000
-
-export async function enqueueZhoraJob(args: {
-  eventKey: string
-  input: OpenRouterInput
-  ticketId?: string | null
-  agentId?: string | null
-}): Promise<ZhoraJob> {
-  getZhoraModel(args.input)
-  if (!args.eventKey.trim() || args.eventKey.length > 160)
-    throw new Error('[zhora] invalid_job_event_key')
-  const { systemPrompt, input, knowledge, cachePrompt } = args.input
-  try {
-    return await prismaSupport.zhoraJob.upsert({
-      where: { eventKey: args.eventKey },
-      create: {
-        eventKey: args.eventKey,
-        operation: args.input.operation,
-        input: {
-          systemPrompt,
-          input,
-          ...(knowledge !== undefined ? { knowledge } : {}),
-          ...(cachePrompt !== undefined ? { cachePrompt } : {}),
-        },
-        ticketId: args.ticketId ?? null,
-        agentId: args.agentId ?? null,
-      },
-      update: {},
-    })
-  } catch (error) {
-    // Prisma may emulate an empty-update upsert with read/create. If two
-    // producers race, the unique event key still selects one durable job.
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === 'P2002'
-    ) {
-      const existing = await prismaSupport.zhoraJob
-        .findUnique({
-          where: { eventKey: args.eventKey },
-        })
-        .catch(() => null)
-      if (existing) return existing
-    }
-    // Do not expose Prisma's query arguments (which include prepared text).
-    throw new Error('[zhora] job_enqueue_failed')
-  }
-}
 
 function readInput(job: ZhoraJob): OpenRouterInput {
   const value = job.input
@@ -248,7 +203,9 @@ export function startZhoraWorker(): () => Promise<void> {
         // periodically. Ordinary CRUD writes already enqueue their own jobs.
         nextKbDiscovery = Date.now() + (kbCursor ? 0 : KB_DISCOVERY_INTERVAL_MS)
       }
+      await runZhoraTranslationPass()
       await runZhoraJobPass(() => stopping)
+      if (!stopping) await runZhoraTranslationPass()
     })()
       .catch(() => {
         logger.warn('[zhora] job pass failed; no automatic generation retry')

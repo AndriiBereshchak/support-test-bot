@@ -303,22 +303,26 @@ export async function sendToTopic(args: {
  * name or a URL has the same problem.
  */
 /**
- * `topicId: null` answers in the group's General topic.
- *
- * Only ever reached by an explicit bot command (the update router dispatches
- * commands before its General-topic silence check, and returns immediately
- * afterwards). Relayed chat can never land here — which is what keeps the
- * "the bot does nothing in General" rule true for the discussion itself while
- * still letting an admin run `/ticket <nId>` before any topic exists.
+ * Plain text in the operator Telegram group. `topicId: null` targets General;
+ * ticket translations pass their topic and reply to the mirrored user message.
+ * This does not deliver a reply to the customer on the website.
  */
 export async function sendPlainMessage(args: {
   chatId: number
   topicId: number | null
   text: string
+  replyToMessageId?: number
 }): Promise<number | null> {
   const bot = getBot()
   if (!bot) return null
-  return sendPlainToTopic(bot, args.chatId, args.topicId, args.text)
+  return sendPlainToTopic(
+    bot,
+    args.chatId,
+    args.topicId,
+    args.text,
+    undefined,
+    args.replyToMessageId
+  )
 }
 
 async function sendPlainToTopic(
@@ -326,7 +330,8 @@ async function sendPlainToTopic(
   chatId: number,
   topicId: number | null,
   text: string,
-  failure?: RelayFailure
+  failure?: RelayFailure,
+  replyToMessageId?: number
 ): Promise<number | null> {
   let firstId: number | null = null
   for (const chunk of splitText(text)) {
@@ -335,6 +340,9 @@ async function sendPlainToTopic(
       () =>
         bot.api.sendMessage(chatId, chunk, {
           ...(topicId != null ? { message_thread_id: topicId } : {}),
+          ...(replyToMessageId !== undefined
+            ? { reply_parameters: { message_id: replyToMessageId } }
+            : {}),
           link_preview_options: { is_disabled: true },
         }),
       failure

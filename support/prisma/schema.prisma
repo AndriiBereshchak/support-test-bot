@@ -96,6 +96,11 @@ model SupportTicket {
   // is he looking at" changes the answer to half the questions asked.
   originDomain String? @map("origin_domain") @db.VarChar(255)
 
+  // Most recently detected customer language. seq prevents an older AI job
+  // finishing late from overwriting a newer message's language.
+  detectedLang    String? @map("detected_lang") @db.VarChar(16)
+  detectedLangSeq Int     @default(0) @map("detected_lang_seq")
+
   // Telegram forum topic binding. chatId is stored per-ticket (not only in
   // env) so moving support to a new group never orphans historical threads.
   tgChatId        BigInt? @map("tg_chat_id")
@@ -273,6 +278,7 @@ model SupportMessage {
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz()
 
   attachments SupportAttachment[]
+  translation ZhoraTranslation?
 
   @@unique([ticketId, seq])
   @@index([ticketId, createdAt])
@@ -480,10 +486,32 @@ model ZhoraJob {
   leaseExpiresAt DateTime? @map("lease_expires_at") @db.Timestamptz()
   result         Json?
   errorCode      String?   @map("error_code") @db.VarChar(64)
+  translation    ZhoraTranslation?
 
   @@index([status, createdAt])
   @@index([status, leaseExpiresAt])
   @@map("zhora_jobs")
+}
+
+// One durable translation task/cache per customer message. The generic AI job
+// remains the paid-call dedupe and audit record.
+model ZhoraTranslation {
+  messageId String         @id @map("message_id") @db.Uuid
+  message   SupportMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  jobId     String?        @unique @map("job_id") @db.Uuid
+  job       ZhoraJob?      @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  detectedLang String?    @map("detected_lang") @db.VarChar(16)
+  textRu       String?    @map("text_ru")
+  errorCode    String?    @map("error_code") @db.VarChar(32)
+  sentTgMessageId Int?    @map("sent_tg_message_id")
+  sentAt       DateTime?  @map("sent_at") @db.Timestamptz()
+  sendingUntil DateTime?  @map("sending_until") @db.Timestamptz()
+  nextChunkIndex Int      @default(0) @map("next_chunk_index")
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@index([sentAt, sendingUntil])
+  @@map("zhora_translations")
 }
 
 // Content fields follow the KB document; id identifies a stored copy.

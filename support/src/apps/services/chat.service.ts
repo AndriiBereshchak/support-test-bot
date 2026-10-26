@@ -5,6 +5,7 @@ import {
 } from '@prisma-support'
 
 import { prismaSupport } from '@config/database'
+import { ZHORA_ENABLED } from '@config/env'
 import { logger } from '@config/logger'
 import { redisClient, supportKey } from '@config/redis'
 
@@ -439,6 +440,7 @@ export async function userSendMessage(
     text,
     attachmentIds,
     dedupeKey: requestId ? `web:${requestId}` : null,
+    translationPending: ZHORA_ENABLED && !!text && /\p{L}/u.test(text),
   })
 
   const ticket = await ensureTopic(openTicket)
