@@ -1,10 +1,30 @@
 import { prismaSupport } from '@config/database'
 import { logger } from '@config/logger'
-import { sendPlainMessage, ZHORA_SEND_CALLBACK_PREFIX } from '@telegram/api'
-import { splitText } from '@telegram/text'
+import {
+  sendMonospaceMessage,
+  sendPlainMessage,
+  ZHORA_SEND_CALLBACK_PREFIX,
+} from '@telegram/api'
+import { splitText, TELEGRAM_TEXT_LIMIT } from '@telegram/text'
 
 const SEND_LEASE_MS = 60_000
 const BATCH_SIZE = 10
+const COPY_TEXT_LIMIT = 256
+
+/** Partition the copyable answer without dropping separators or splitting emoji. */
+function exactCopyChunks(answer: string): string[] {
+  const chunks: string[] = []
+  for (let start = 0; start < answer.length; ) {
+    let end = Math.min(start + TELEGRAM_TEXT_LIMIT, answer.length)
+    if (end < answer.length) {
+      const next = answer.charCodeAt(end)
+      if (next >= 0xdc00 && next <= 0xdfff) end -= 1
+    }
+    chunks.push(answer.slice(start, end))
+    start = end
+  }
+  return chunks
+}
 
 function previewText(result: unknown): string {
   if (!result || typeof result !== 'object')
@@ -84,45 +104,57 @@ export async function runZhoraSuggestionPreviewPass(): Promise<void> {
     if (!claimed.count) continue
 
     let body = 'Не удалось подготовить черновик Жоры. Попробуйте ещё раз.'
-    let sendable = false
+    let answer: string | null = null
     if (row.job.status === 'completed') {
       try {
         body = previewText(row.job.result)
-        sendable = true
+        answer = (row.job.result as { answer: string }).answer
       } catch {
         logger.warn('[zhora] completed suggestion has invalid result')
       }
     }
-    const chunks = splitText(body)
-    for (let index = row.nextChunkIndex; index < chunks.length; index++) {
+    const previewChunks = splitText(body)
+    const copyChunks =
+      answer && answer.length > COPY_TEXT_LIMIT ? exactCopyChunks(answer) : []
+    const totalChunks = previewChunks.length + copyChunks.length
+    for (let index = row.nextChunkIndex; index < totalChunks; index++) {
       let sentId: number | null = null
       try {
-        // Each chunk is below Telegram's limit; persist it before the next.
-        sentId = await sendPlainMessage({
+        // Persist each Telegram message before sending the next. A failed copy
+        // block resumes without repeating the already delivered preview.
+        const copyChunk = copyChunks[index - previewChunks.length]
+        const complete = index === totalChunks - 1
+        const replyMarkup =
+          answer && complete
+            ? {
+                inline_keyboard: [
+                  [
+                    {
+                      text: 'Отправить',
+                      callback_data: `${ZHORA_SEND_CALLBACK_PREFIX}${row.id}`,
+                    },
+                    ...(copyChunks.length
+                      ? []
+                      : [{ text: 'Скопировать', copy_text: { text: answer } }]),
+                  ],
+                ],
+              }
+            : undefined
+        const args = {
           chatId: Number(row.targetMessage.ticket.tgChatId!),
           topicId: row.targetMessage.ticket.tgTopicId!,
           replyToMessageId: row.targetMessage.tgMessageId ?? undefined,
-          text: chunks[index]!,
-          ...(sendable && index === chunks.length - 1
-            ? {
-                replyMarkup: {
-                  inline_keyboard: [
-                    [
-                      {
-                        text: 'Отправить',
-                        callback_data: `${ZHORA_SEND_CALLBACK_PREFIX}${row.id}`,
-                      },
-                    ],
-                  ],
-                },
-              }
-            : {}),
-        })
+          ...(replyMarkup ? { replyMarkup } : {}),
+        }
+        sentId =
+          copyChunk === undefined
+            ? await sendPlainMessage({ ...args, text: previewChunks[index]! })
+            : await sendMonospaceMessage({ ...args, text: copyChunk })
       } catch {
         logger.warn('[zhora] suggestion preview delivery failed')
       }
       if (!sentId) break
-      const complete = index === chunks.length - 1
+      const complete = index === totalChunks - 1
       await prismaSupport.zhoraSuggestion.update({
         where: { id: row.id },
         data: {

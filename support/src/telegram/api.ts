@@ -29,6 +29,7 @@ import { classifyPermanentFailure, createHardenedTransport } from './transport'
 import type { PermanentFailure } from './transport'
 import {
   TELEGRAM_CAPTION_LIMIT,
+  TELEGRAM_TEXT_LIMIT,
   escapeHtml,
   formatThreadTopicName,
   formatTopicName,
@@ -349,6 +350,31 @@ export async function sendPlainMessage(args: {
     args.replyToMessageId,
     args.replyMarkup
   )
+}
+
+/** One exact text fragment rendered as a tappable Telegram code block. */
+export async function sendMonospaceMessage(args: {
+  chatId: number
+  topicId: number
+  text: string
+  replyToMessageId?: number
+  replyMarkup?: InlineKeyboardMarkup
+}): Promise<number | null> {
+  if (!args.text || args.text.length > TELEGRAM_TEXT_LIMIT) return null
+  const bot = getBot()
+  if (!bot) return null
+  const sent = await safeCall('sendMessage (zhora copy)', () =>
+    bot.api.sendMessage(args.chatId, args.text, {
+      message_thread_id: args.topicId,
+      ...(args.replyToMessageId !== undefined
+        ? { reply_parameters: { message_id: args.replyToMessageId } }
+        : {}),
+      entities: [{ type: 'pre', offset: 0, length: args.text.length }],
+      ...(args.replyMarkup ? { reply_markup: args.replyMarkup } : {}),
+      link_preview_options: { is_disabled: true },
+    })
+  )
+  return sent?.message_id ?? null
 }
 
 async function sendPlainToTopic(

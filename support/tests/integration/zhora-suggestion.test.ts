@@ -44,6 +44,7 @@ vi.mock('@apps/services/zhora/llm.service', async (importOriginal) => ({
 vi.mock('@telegram/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@telegram/api')>()),
   sendPlainMessage: vi.fn(async () => 12345),
+  sendMonospaceMessage: vi.fn(async () => 12346),
 }))
 
 import { prismaSupport } from '@config/database'
@@ -56,7 +57,7 @@ import { generateZhoraTextWithJournal } from '@apps/services/zhora/llm.service'
 import { runZhoraJobPass } from '@apps/services/zhora/job.service'
 import { requestZhoraSuggestion } from '@apps/services/zhora/suggestion.service'
 import { runZhoraSuggestionPreviewPass } from '@apps/services/zhora/suggestion-preview.service'
-import { sendPlainMessage } from '@telegram/api'
+import { sendMonospaceMessage, sendPlainMessage } from '@telegram/api'
 
 beforeAll(() => {
   const cli = path.join(
@@ -211,6 +212,10 @@ describe('Zhora answer requests', () => {
               text: 'Отправить',
               callback_data: `zs:${first.suggestion.id}`,
             },
+            {
+              text: 'Скопировать',
+              copy_text: { text: 'Proszę podać ID wypłaty.' },
+            },
           ],
         ],
       },
@@ -241,7 +246,7 @@ describe('Zhora answer requests', () => {
       ticketId: ticket.id,
       eventKey: 'reply:cmd:-100:126',
     })
-    const longAnswer = `${'Answer '.repeat(400)}\n${'Detail '.repeat(200)}`
+    const longAnswer = `${'Answer '.repeat(400)}\n${'Detail '.repeat(100)}`
     await prismaSupport.zhoraJob.update({
       where: { id: suggestion.jobId },
       data: {
@@ -255,12 +260,13 @@ describe('Zhora answer requests', () => {
         },
       },
     })
-    vi.mocked(sendPlainMessage)
-      .mockResolvedValueOnce(12345)
+    vi.mocked(sendPlainMessage).mockResolvedValueOnce(12345)
+    vi.mocked(sendMonospaceMessage)
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(12346)
     await runZhoraSuggestionPreviewPass()
-    expect(vi.mocked(sendPlainMessage)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(sendPlainMessage)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(sendMonospaceMessage)).toHaveBeenCalledTimes(1)
     expect(
       (
         await prismaSupport.zhoraSuggestion.findUniqueOrThrow({
@@ -273,17 +279,23 @@ describe('Zhora answer requests', () => {
       data: { previewSendingUntil: new Date(0) },
     })
     await runZhoraSuggestionPreviewPass()
-    expect(vi.mocked(sendPlainMessage)).toHaveBeenCalledTimes(3)
+    expect(vi.mocked(sendPlainMessage)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(sendMonospaceMessage)).toHaveBeenCalledTimes(2)
     expect(
       vi.mocked(sendPlainMessage).mock.calls[0]![0].replyMarkup
     ).toBeUndefined()
-    expect(vi.mocked(sendPlainMessage).mock.calls[2]![0].replyMarkup).toEqual({
+    expect(
+      vi.mocked(sendMonospaceMessage).mock.calls[1]![0].replyMarkup
+    ).toEqual({
       inline_keyboard: [
         [{ text: 'Отправить', callback_data: `zs:${suggestion.id}` }],
       ],
     })
-    expect(vi.mocked(sendPlainMessage).mock.calls[2]![0].text).toContain(
+    expect(vi.mocked(sendPlainMessage).mock.calls[0]![0].text).toContain(
       'Источник: ⚠ в базе нет ответа'
+    )
+    expect(vi.mocked(sendMonospaceMessage).mock.calls[1]![0].text).toBe(
+      longAnswer
     )
     expect(
       (
@@ -297,6 +309,113 @@ describe('Zhora answer requests', () => {
         where: { ticketId: ticket.id, direction: 'OUT' },
       })
     ).toBe(0)
+  })
+
+  it.each([256, 257])(
+    'uses the copy button only up to %i characters',
+    async (length) => {
+      const { ticket } = await customerMessage('Question', 'en')
+      await prismaSupport.supportTicket.update({
+        where: { id: ticket.id },
+        data: { tgChatId: -1002000000001n, tgTopicId: 781 },
+      })
+      const { suggestion } = await requestZhoraSuggestion({
+        ticketId: ticket.id,
+        eventKey: `reply:copy:${length}`,
+      })
+      const answer = 'A'.repeat(length)
+      await prismaSupport.zhoraJob.update({
+        where: { id: suggestion.jobId },
+        data: {
+          status: 'completed',
+          result: {
+            answer,
+            answerRu: 'Русский ответ',
+            sourceKbIds: [],
+            needsReview: false,
+            sources: [],
+          },
+        },
+      })
+      await runZhoraSuggestionPreviewPass()
+      if (length === 256) {
+        expect(vi.mocked(sendMonospaceMessage)).not.toHaveBeenCalled()
+        expect(
+          vi.mocked(sendPlainMessage).mock.calls[0]![0].replyMarkup
+        ).toEqual({
+          inline_keyboard: [
+            [
+              { text: 'Отправить', callback_data: `zs:${suggestion.id}` },
+              { text: 'Скопировать', copy_text: { text: answer } },
+            ],
+          ],
+        })
+      } else {
+        expect(
+          vi.mocked(sendPlainMessage).mock.calls[0]![0].replyMarkup
+        ).toBeUndefined()
+        expect(vi.mocked(sendMonospaceMessage).mock.calls[0]![0]).toMatchObject(
+          {
+            text: answer,
+            replyMarkup: {
+              inline_keyboard: [
+                [{ text: 'Отправить', callback_data: `zs:${suggestion.id}` }],
+              ],
+            },
+          }
+        )
+      }
+    }
+  )
+
+  it('splits an oversized copy into complete ordered code blocks', async () => {
+    const { ticket } = await customerMessage('Question', 'en')
+    await prismaSupport.supportTicket.update({
+      where: { id: ticket.id },
+      data: { tgChatId: -1002000000001n, tgTopicId: 780 },
+    })
+    const { suggestion } = await requestZhoraSuggestion({
+      ticketId: ticket.id,
+      eventKey: 'reply:copy:oversized',
+    })
+    const answer = `${'A'.repeat(4095)}😀${'B'.repeat(50)}`
+    await prismaSupport.zhoraJob.update({
+      where: { id: suggestion.jobId },
+      data: {
+        status: 'completed',
+        result: {
+          answer,
+          answerRu: 'Русский ответ',
+          sourceKbIds: [],
+          needsReview: false,
+          sources: [],
+        },
+      },
+    })
+    await runZhoraSuggestionPreviewPass()
+    const copyCalls = vi
+      .mocked(sendMonospaceMessage)
+      .mock.calls.map(([args]) => args)
+    expect(copyCalls).toHaveLength(2)
+    expect(copyCalls.map((args) => args.text).join('')).toBe(answer)
+    expect(copyCalls[0]!.text.length).toBeLessThanOrEqual(4096)
+    expect(copyCalls[0]!.text.endsWith('😀')).toBe(false)
+    expect(copyCalls[0]!.replyMarkup).toBeUndefined()
+    expect(copyCalls[1]!.replyMarkup).toEqual({
+      inline_keyboard: [
+        [{ text: 'Отправить', callback_data: `zs:${suggestion.id}` }],
+      ],
+    })
+    expect(
+      (
+        await prismaSupport.zhoraSuggestion.findUniqueOrThrow({
+          where: { id: suggestion.id },
+        })
+      ).nextChunkIndex
+    ).toBe(
+      vi.mocked(sendPlainMessage).mock.calls.length +
+        vi.mocked(sendMonospaceMessage).mock.calls.length
+    )
   })
 
   it.each(['failed', 'uncertain', 'malformed'])(
