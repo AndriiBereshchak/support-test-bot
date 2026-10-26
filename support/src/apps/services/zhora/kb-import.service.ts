@@ -1,9 +1,20 @@
 import { parse } from 'csv-parse/sync'
 import { ApiError } from '@core/errors/api-error'
-import { kbFields } from './kb.schema'
+import { kbImportFields } from './kb.schema'
+import type { ZhoraKbInput } from './kb.service'
+import type { ZhoraKbConfigInput } from './kb-config.service'
 
-// A bounded initial import, not a streaming/synchronization system.
-export const MAX_KB_IMPORT_ENTRIES = 1000
+type ZhoraKbFileEntry = ZhoraKbInput & { id?: string }
+export type ZhoraKbImport =
+  | ZhoraKbFileEntry[]
+  | { entries: ZhoraKbFileEntry[]; config?: ZhoraKbConfigInput }
+
+/** Called only after validating the complete file with kbImportSchema. */
+export function normalizeZhoraKbImport(data: ZhoraKbImport): ZhoraKbInput[] {
+  const fileEntries = Array.isArray(data) ? data : data.entries
+  // File IDs are labels from the source, not database identities.
+  return fileEntries.map(({ id: _id, ...entry }) => entry)
+}
 
 export function parseZhoraKbImport(
   content: string,
@@ -25,7 +36,7 @@ export function parseZhoraKbImport(
       columns: (headers: string[]) => {
         if (
           new Set(headers).size !== headers.length ||
-          headers.some((key) => !Object.hasOwn(kbFields, key))
+          headers.some((key) => !Object.hasOwn(kbImportFields, key))
         ) {
           throw new Error('Invalid CSV headers')
         }
@@ -41,7 +52,15 @@ export function parseZhoraKbImport(
   }
   return rows.map((row, index) => {
     const entry: Record<string, unknown> = { ...row }
-    for (const key of ['questions', 'translations', 'domains']) {
+    for (const key of [
+      'variants',
+      'translations',
+      'domains',
+      'notes',
+      'dynamic_fields',
+      'ask_user',
+      'is_temporary',
+    ]) {
       if (!row[key]?.trim()) {
         delete entry[key]
         continue
@@ -56,6 +75,7 @@ export function parseZhoraKbImport(
         )
       }
     }
+    if (!row.id?.trim()) delete entry.id
     if (!row.status?.trim()) delete entry.status
     return entry
   })

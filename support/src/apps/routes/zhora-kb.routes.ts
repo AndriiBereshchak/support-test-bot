@@ -17,27 +17,24 @@ import {
 import {
   kbFields as fields,
   kbText as text,
+  kbImportSchema,
+  kbConfigFields,
 } from '@apps/services/zhora/kb.schema'
 import {
+  getZhoraKbConfig,
+  updateZhoraKbConfig,
+  type ZhoraKbConfigInput,
+} from '@apps/services/zhora/kb-config.service'
+import {
   parseZhoraKbImport,
-  MAX_KB_IMPORT_ENTRIES,
+  normalizeZhoraKbImport,
+  type ZhoraKbImport,
 } from '@apps/services/zhora/kb-import.service'
 
 type CreateKbBody = ZhoraKbInput & { updatedById: string }
 type UpdateKbBody = Partial<ZhoraKbInput> & { updatedById: string }
 
 const status = fields.status
-const importSchema = {
-  type: 'array',
-  minItems: 1,
-  maxItems: MAX_KB_IMPORT_ENTRIES,
-  items: {
-    type: 'object',
-    additionalProperties: false,
-    required: ['questions', 'answerRu', 'tag'],
-    properties: fields,
-  },
-} as const
 const params = {
   type: 'object',
   required: ['id'],
@@ -63,8 +60,9 @@ export const zhoraKbRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // multipart/form-data: one UTF-8 .json/.csv file and updatedById field.
-  // JSON is an array of entries. CSV uses matching headers; questions,
-  // translations and domains cells contain JSON values.
+  // JSON accepts a flat array or a document. The document may update links.
+  // File IDs are discarded; support generates its own UUIDs.
+  // CSV uses the import fields; array/object/boolean cells contain JSON.
   app.post('/import', async (request, reply) => {
     const file = await request.file()
     if (!file) throw new ApiError('file is required', 400, 'NO_FILE')
@@ -95,30 +93,65 @@ export const zhoraKbRoutes: FastifyPluginAsync = async (app) => {
     } catch {
       throw new ApiError('File must use UTF-8', 400, 'KB_IMPORT_INVALID')
     }
-    const entries = parseZhoraKbImport(content, format)
-    const validate = request.compileValidationSchema(importSchema)
-    if (!validate(entries)) {
-      const error = validate.errors?.[0]
+    const data = parseZhoraKbImport(content, format)
+    const validate = request.compileValidationSchema(kbImportSchema)
+    if (!validate(data)) {
+      // anyOf also reports errors for the alternate format. Show only the
+      // applicable branch so a document error is not reported as "not array".
+      const branch = Array.isArray(data) ? '#/anyOf/0/' : '#/anyOf/1/'
+      const error = validate.errors?.find((item) =>
+        item.schemaPath.startsWith(branch)
+      )
       const parts = error?.instancePath.split('/') ?? []
+      const index = parts[1] === 'entries' ? 2 : 1
       const location =
-        parts[1] !== undefined
-          ? `Record ${Number(parts[1]) + 1}${parts.slice(2).length ? ` (${parts.slice(2).join('/')})` : ''}`
-          : 'File'
+        parts[index] !== undefined && /^\d+$/.test(parts[index]!)
+          ? `Record ${Number(parts[index]) + 1}${parts.slice(index + 1).length ? ` (${parts.slice(index + 1).join('/')})` : ''}`
+          : `File${error?.instancePath ? ` (${error.instancePath})` : ''}`
       throw new ApiError(
         `${location}: ${error?.message ?? 'invalid entries'}`,
         400,
         'KB_IMPORT_INVALID'
       )
     }
+    const entries = normalizeZhoraKbImport(data as ZhoraKbImport)
+    const config = Array.isArray(data)
+      ? undefined
+      : (data as Extract<ZhoraKbImport, { entries: ZhoraKbInput[] }>).config
     return reply
       .code(201)
-      .send(
-        await importZhoraKbEntries(
-          entries as ZhoraKbInput[],
-          author.value.trim()
-        )
-      )
+      .send(await importZhoraKbEntries(entries, author.value.trim(), config))
   })
+
+  app.get('/config', async () => {
+    const config = await getZhoraKbConfig()
+    if (!config)
+      throw new ApiError('KB config not found', 404, 'KB_CONFIG_NOT_FOUND')
+    return config
+  })
+
+  app.patch<{
+    Body: Partial<ZhoraKbConfigInput> & { updatedById: string }
+  }>(
+    '/config',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['updatedById'],
+          anyOf: Object.keys(kbConfigFields).map((field) => ({
+            required: [field],
+          })),
+          properties: { ...kbConfigFields, updatedById: text },
+        },
+      },
+    },
+    async (request) => {
+      const { updatedById, ...input } = request.body
+      return updateZhoraKbConfig(input, updatedById.trim())
+    }
+  )
 
   app.post<{ Body: CreateKbBody }>(
     '/',
@@ -128,7 +161,7 @@ export const zhoraKbRoutes: FastifyPluginAsync = async (app) => {
         body: {
           type: 'object',
           additionalProperties: false,
-          required: ['questions', 'answerRu', 'tag', 'updatedById'],
+          required: ['question', 'answer_ru', 'category', 'updatedById'],
           properties: { ...fields, updatedById: text },
         },
       },
@@ -152,7 +185,7 @@ export const zhoraKbRoutes: FastifyPluginAsync = async (app) => {
             limit: { type: 'integer', minimum: 1, maximum: 200 },
             offset: { type: 'integer', minimum: 0 },
             status,
-            tag: text,
+            category: text,
           },
         },
       },

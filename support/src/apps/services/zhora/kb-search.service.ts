@@ -13,7 +13,7 @@ import {
 // PostgreSQL produces this fingerprint both when scheduling and when searching.
 // It detects content changes, including writes outside the support CRUD API;
 // MD5 here is a change marker, not a security or identity check.
-const sourceHash = Prisma.sql`md5(questions::text || chr(10) || answer_ru)`
+const sourceHash = Prisma.sql`md5(question || chr(10) || variants::text || chr(10) || answer_ru)`
 
 /** Queue only the supplied records. CRUD passes its transaction so the edit
  * and its durable indexing job commit or roll back together. No AI is called.
@@ -87,9 +87,9 @@ export async function indexZhoraKbJob(
     throw new OpenRouterError('invalid_input')
   if (input.model !== ZHORA_MODEL_EMBEDDING) return { indexed: false }
   const rows = await prismaSupport.$queryRaw<
-    Array<{ questions: string[]; answerRu: string }>
+    Array<{ question: string; variants: string[]; answer_ru: string }>
   >`
-    SELECT questions, answer_ru AS "answerRu" FROM zhora_kb_entries
+    SELECT question, variants, answer_ru FROM zhora_kb_entries
     WHERE id = ${input.kbEntryId}::uuid AND status = 'active'
       AND ${sourceHash} = ${input.sourceHash}
       AND (embedding IS NULL OR embedding_hash IS DISTINCT FROM ${sourceHash}
@@ -97,7 +97,7 @@ export async function indexZhoraKbJob(
   `
   const entry = rows[0]
   if (!entry) return { indexed: false }
-  const text = `Questions:\n${entry.questions.join('\n')}\n\nAnswer (RU):\n${entry.answerRu}`
+  const text = `Questions:\n${[entry.question, ...entry.variants].join('\n')}\n\nAnswer (RU):\n${entry.answer_ru}`
   const result = await generateZhoraEmbeddingWithJournal(text, {
     jobId: job.id,
   })
@@ -120,7 +120,17 @@ export interface KbSearchOptions {
 
 export type ZhoraKbMatch = Pick<
   ZhoraKbEntry,
-  'id' | 'questions' | 'answerRu' | 'translations' | 'tag' | 'domains'
+  | 'id'
+  | 'question'
+  | 'variants'
+  | 'answer_ru'
+  | 'translations'
+  | 'category'
+  | 'domains'
+  | 'notes'
+  | 'dynamic_fields'
+  | 'ask_user'
+  | 'is_temporary'
 > & { score: number }
 
 function eligibleEntries(originDomain?: string | null): Prisma.Sql {
@@ -158,7 +168,8 @@ export async function findZhoraKbMatches(
     // Filtered ANN scans may otherwise stop before finding enough eligible rows.
     await tx.$executeRaw`SET LOCAL hnsw.iterative_scan = 'strict_order'`
     return tx.$queryRaw<ZhoraKbMatch[]>`
-      SELECT id, questions, answer_ru AS "answerRu", translations, tag, domains,
+      SELECT id, question, variants, answer_ru, translations, category, domains,
+        notes, dynamic_fields, ask_user, is_temporary,
         1 - (embedding OPERATOR(public.<=>) ${vector}::public.vector) AS score
       FROM zhora_kb_entries
       WHERE ${eligibleEntries(options.originDomain)}

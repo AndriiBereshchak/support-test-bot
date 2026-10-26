@@ -486,22 +486,26 @@ model ZhoraJob {
   @@map("zhora_jobs")
 }
 
-// One knowledge entry: question variants, RU master answer and translations.
-// Language completeness and JSON shape are validated by the later KB API.
+// Content fields follow the KB document; id identifies a stored copy.
 model ZhoraKbEntry {
-  id           String   @id @default(uuid()) @db.Uuid
-  questions    String[]
-  answerRu     String   @map("answer_ru")
-  translations Json
-  tag          String
+  id             String   @id @default(uuid()) @db.Uuid
+  question       String
+  variants       String[] @default([])
+  answer_ru      String
+  translations   Json
+  category       String
+  notes          String[] @default([])
+  dynamic_fields String[] @default([])
+  ask_user       String[] @default([])
+  is_temporary   Boolean  @default(false)
   // Empty means unrestricted; otherwise only the listed domains may use it.
-  domains      String[] @default([])
+  domains        String[] @default([])
   // draft / active. Only active entries participate in answer retrieval.
-  status       String   @default("draft") @db.VarChar(16)
+  status         String   @default("draft") @db.VarChar(16)
   // External admin identity; no assumption that it is a SupportAgent ID.
-  updatedById  String   @map("updated_by_id")
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+  updatedById    String   @map("updated_by_id")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz()
 
   // pgvector is queried with parameterized SQL; Prisma omits this unsupported
   // nullable field from ordinary CRUD results. A hash ties it to the source text.
@@ -511,4 +515,18 @@ model ZhoraKbEntry {
   embeddingIndexedAt DateTime?                    @map("embedding_indexed_at") @db.Timestamptz()
 
   @@map("zhora_kb_entries")
+}
+
+// Shared links used by placeholders in KB answers. The document header itself
+// is not stored; one row is updated when links change.
+model ZhoraKbConfig {
+  id               Int      @id @default(1)
+  fullVersionUrl   String   @map("full_version_url")
+  iosUrl           String   @map("ios_url")
+  androidUrl       String   @map("android_url")
+  updatedById      String   @map("updated_by_id")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@map("zhora_kb_config")
 }

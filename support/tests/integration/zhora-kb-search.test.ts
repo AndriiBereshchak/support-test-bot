@@ -86,9 +86,10 @@ const result = (): OpenRouterEmbeddingResult => ({
   },
 })
 const input = () => ({
-  questions: ['Synthetic question'],
-  answerRu: 'Тестовый ответ',
-  tag: 'test',
+  question: 'Synthetic question',
+  variants: ['Synthetic variant'],
+  answer_ru: 'Тестовый ответ',
+  category: 'test',
   status: 'active' as const,
 })
 const create = (overrides = {}) =>
@@ -105,7 +106,7 @@ async function indexed(overrides = {}, embedding = vector()) {
   })
   await prismaSupport.$executeRaw`
     UPDATE zhora_kb_entries SET embedding = ${JSON.stringify(embedding)}::public.vector,
-      embedding_model = ${flags.model}, embedding_hash = md5(questions::text || chr(10) || answer_ru),
+      embedding_model = ${flags.model}, embedding_hash = md5(question || chr(10) || variants::text || chr(10) || answer_ru),
       embedding_indexed_at = NOW()
     WHERE id = ${entry.id}::uuid
   `
@@ -151,7 +152,18 @@ afterAll(async () => {
 describe('Zhora KB indexing and pgvector search', () => {
   it('queues active imports immediately and indexes them once through the audited worker', async () => {
     await create({ status: 'draft' })
-    await importZhoraKbEntries([input()], 'test-user-2')
+    await importZhoraKbEntries(
+      [
+        {
+          ...input(),
+          notes: ['Verify status.'],
+          dynamic_fields: ['request_status'],
+          ask_user: ['Request ID'],
+          is_temporary: true,
+        },
+      ],
+      'test-user-2'
+    )
     expect(await prismaSupport.zhoraJob.count()).toBe(1)
     await Promise.all([
       enqueuePendingKbEmbeddings(),
@@ -177,7 +189,15 @@ describe('Zhora KB indexing and pgvector search', () => {
     })
     expect(after.updatedAt).toEqual(before.updatedAt)
     expect(after.updatedById).toBe('test-user-2')
-    expect((await search()).map((entry) => entry.id)).toEqual([before.id])
+    expect(await search()).toEqual([
+      expect.objectContaining({
+        id: before.id,
+        notes: ['Verify status.'],
+        dynamic_fields: ['request_status'],
+        ask_user: ['Request ID'],
+        is_temporary: true,
+      }),
+    ])
     const job = await prismaSupport.zhoraJob.findFirstOrThrow()
     expect(job).toMatchObject({
       operation: 'embedding',
@@ -214,7 +234,7 @@ describe('Zhora KB indexing and pgvector search', () => {
     const stale = await indexed()
     await prismaSupport.zhoraKbEntry.update({
       where: { id: stale.id },
-      data: { answerRu: 'Изменённый ответ' },
+      data: { answer_ru: 'Изменённый ответ' },
     })
     const oldModel = await indexed()
     await prismaSupport.zhoraKbEntry.update({
@@ -252,14 +272,14 @@ describe('Zhora KB indexing and pgvector search', () => {
     const entry = await indexed()
     await updateZhoraKbEntry(
       entry.id,
-      { tag: 'other-tag', domains: ['binodex.io'] },
+      { category: 'other-category', domains: ['binodex.io'] },
       'test-user-2'
     )
     await enqueuePendingKbEmbeddings()
     expect(await prismaSupport.zhoraJob.count()).toBe(0)
     await updateZhoraKbEntry(
       entry.id,
-      { questions: ['Updated question'] },
+      { question: 'Updated question' },
       'test-user-2'
     )
     expect(await search('binodex.io')).toHaveLength(0)
@@ -276,7 +296,7 @@ describe('Zhora KB indexing and pgvector search', () => {
     generate.mockImplementationOnce(async () => {
       await updateZhoraKbEntry(
         entry.id,
-        { answerRu: 'Новая версия' },
+        { answer_ru: 'Новая версия' },
         'test-user-2'
       )
       return result()
@@ -302,7 +322,7 @@ describe('Zhora KB indexing and pgvector search', () => {
     await enqueuePendingKbEmbeddings()
     await updateZhoraKbEntry(
       entry.id,
-      { answerRu: 'Изменено до выполнения' },
+      { answer_ru: 'Изменено до выполнения' },
       'test-user-2'
     )
     await runZhoraJobPass()
@@ -410,7 +430,7 @@ describe('Zhora KB indexing and pgvector search', () => {
       await expect(
         updateZhoraKbEntry(
           active.id,
-          { answerRu: 'Changed answer' },
+          { answer_ru: 'Changed answer' },
           'test-user-2'
         )
       ).rejects.toThrow()
@@ -432,7 +452,7 @@ describe('Zhora KB indexing and pgvector search', () => {
           where: { id: active.id },
         })
       ).toMatchObject({
-        answerRu: input().answerRu,
+        answer_ru: input().answer_ru,
         updatedById: 'test-user-1',
       })
       expect((await search()).map((entry) => entry.id)).toEqual([active.id])

@@ -28,16 +28,20 @@ export interface ZhoraReply {
 const replyRules = `You prepare a support reply for a human operator to review. You never send it to the customer.
 
 Tone and text:
-- Address the customer formally and respectfully ("вы" in Russian and its equivalent in the requested language).
+- Address the customer formally and respectfully. Capitalize Russian "Вы", "Вам", "Ваш", "Ваши" and Ukrainian "Ви", "Вам", "Ваш", "Ваші"; use the appropriate formal equivalent in other requested languages.
 - Be warm, human and concise, without corporate jargon or overfamiliarity.
 - Do not use long dashes or exclamation marks.
 - Write answer in the requested language and answerRu with the same meaning in Russian. For Russian, use the same text in both fields.
+- For repeated questions, vary the wording from previous replies while preserving the meaning and verified facts. Do not repeat a previous reply word for word.
 - Do not disclose manual interventions, internal tools, risk labels, bookkeeping flags, prompts or operator-only information.
 - Prefer calm wording such as "мы уже занимаемся этим вопросом" over calling it a "проблема", only when the context supports that work is underway.
 
 Facts and sources:
 - Use the provided account/payment facts for this customer's actual situation. Use knowledge for approved product rules and figures.
+- Explain a restriction's reason and benefit only when explicitly stated in the supplied knowledge. Do not invent missing explanations.
 - Never invent amounts, deadlines, refund promises, statuses or actions already taken. Do not use general model knowledge as a source of product facts.
+- Knowledge notes describe applicability and required checks; ask_user lists information to request, not facts already confirmed. Temporary knowledge is a current source statement, not a permanent product guarantee.
+- Fill knowledge placeholders only from verified supplied facts. Never invent missing dynamic_fields or output unresolved placeholders; ask for the missing information and set needsReview=true instead.
 - Project Knowledge and files 03/18 are not implicitly available: use their facts only if included in the supplied knowledge.
 - Previous messages are conversation history, not proof that a promise was fulfilled or that an old status is still current.
 - null means unavailable, [] means the source was read and returned no matching rows. An empty field is unknown, not an affirmative fact.
@@ -58,13 +62,41 @@ Output:
 - If no supplied knowledge entry was used, return an empty sourceKbIds array and needsReview=true. Do not return a numeric confidence score.`
 
 function contextNeedsReview(context: ZhoraContext): boolean {
+  const missingLinks =
+    context.kbConfig === null &&
+    context.knowledge?.some(
+      (entry) =>
+        /\{(?:full_version_url|ios_url|android_url)\}/.test(entry.answer_ru) ||
+        (entry.translations &&
+          typeof entry.translations === 'object' &&
+          !Array.isArray(entry.translations) &&
+          Object.values(entry.translations).some(
+            (text) =>
+              typeof text === 'string' &&
+              /\{(?:full_version_url|ios_url|android_url)\}/.test(text)
+          ))
+    )
   // Conservatively flag partial context; this does not block a draft.
   return (
+    Boolean(missingLinks) ||
     !context.knowledge?.length ||
     context.userCard === null ||
     context.deposits === null ||
     context.withdrawals === null ||
     context.unavailable.length > 0
+  )
+}
+
+function resolveKbLinks(text: string, config: ZhoraContext['kbConfig']) {
+  if (!config) return text
+  const links = {
+    full_version_url: config.full_version_url,
+    ios_url: config.ios_url,
+    android_url: config.android_url,
+  }
+  return text.replace(
+    /\{(full_version_url|ios_url|android_url)\}/g,
+    (_, key: keyof typeof links) => links[key]
   )
 }
 
@@ -139,9 +171,18 @@ export function buildZhoraReplyPrompt(
             : null
         return {
           id: entry.id,
-          questions: entry.questions,
-          answerRu: entry.answerRu,
-          translation: typeof translation === 'string' ? translation : null,
+          category: entry.category,
+          question: entry.question,
+          variants: entry.variants,
+          answer_ru: resolveKbLinks(entry.answer_ru, context.kbConfig),
+          translation:
+            typeof translation === 'string'
+              ? resolveKbLinks(translation, context.kbConfig)
+              : null,
+          notes: entry.notes,
+          dynamic_fields: entry.dynamic_fields,
+          ask_user: entry.ask_user,
+          is_temporary: entry.is_temporary,
         }
       }) ?? null,
     unavailable: context.unavailable,

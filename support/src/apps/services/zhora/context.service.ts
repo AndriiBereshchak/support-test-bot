@@ -8,6 +8,7 @@ import { listUserWithdrawals } from '../withdrawal-list.service'
 import { getUserCard } from '../user-card.service'
 import { assertZhoraTicketAvailable } from './access.service'
 import { searchZhoraKb } from './kb-search.service'
+import { getZhoraKbConfig } from './kb-config.service'
 
 const SEARCH_MESSAGE_LIMIT = 5
 const messageSelect = {
@@ -134,18 +135,20 @@ export async function buildZhoraContext(input: ZhoraContextInput) {
     })
     .join('\n')
 
-  const [card, deposits, withdrawals, knowledge] = await Promise.allSettled([
-    getUserCard(ticket.userId, { requireComplete: true }),
-    listUserDeposits(ticket.userId),
-    listUserWithdrawals(ticket.userId),
-    searchZhoraKb({
-      question: searchQuery,
-      originDomain: ticket.originDomain,
-      ticketId: ticket.id,
-      agentId: input.agentId,
-      minScore: input.minScore,
-    }),
-  ])
+  const [card, deposits, withdrawals, knowledge, config] =
+    await Promise.allSettled([
+      getUserCard(ticket.userId, { requireComplete: true }),
+      listUserDeposits(ticket.userId),
+      listUserWithdrawals(ticket.userId),
+      searchZhoraKb({
+        question: searchQuery,
+        originDomain: ticket.originDomain,
+        ticketId: ticket.id,
+        agentId: input.agentId,
+        minScore: input.minScore,
+      }),
+      getZhoraKbConfig(),
+    ])
   const unavailable: string[] = []
   function available<T>(
     result: PromiseSettledResult<T>,
@@ -168,6 +171,7 @@ export async function buildZhoraContext(input: ZhoraContextInput) {
     deposits: available(deposits, 'deposits'),
     withdrawals: available(withdrawals, 'withdrawals'),
     knowledge: available(knowledge, 'knowledge'),
+    kbConfig: config.status === 'fulfilled' ? config.value : null,
     unavailable,
   }
 }

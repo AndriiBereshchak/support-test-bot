@@ -39,9 +39,10 @@ const prefix = '/v1/internal/zhora/kb'
 const headers = { 'x-internal-token': 'synthetic-kb-token' }
 const app = buildApp()
 const payload = () => ({
-  questions: [' How to log in? '],
-  answerRu: ' Ответ ',
-  tag: 'account',
+  question: ' How to log in? ',
+  variants: ['Login help?'],
+  answer_ru: ' Ответ ',
+  category: 'account',
   updatedById: 'test-user-1',
 })
 const create = (body: object = payload()) =>
@@ -77,6 +78,35 @@ function upload(
 const csvCell = (value: unknown) =>
   `"${(typeof value === 'string' ? value : JSON.stringify(value)).replaceAll('"', '""')}"`
 
+// Same structure as the supplied document, without copying its product data.
+const document = () => ({
+  version: '4.0',
+  language: 'ru',
+  product: 'Test product',
+  rules: { style: ['Be concise.'], product: ['Verify the request status.'] },
+  config: {
+    full_version_url: 'https://example.test/full',
+    ios_url: 'https://example.test/ios',
+    android_url: 'https://example.test/android',
+  },
+  entries: [
+    {
+      id: 'TEST_001',
+      category: 'account',
+      question: ' How to open the full version? ',
+      variants: ['How to open the full version?', 'Where is the full version?'],
+      answer_ru:
+        'Откройте {full_version_url}. iOS: {ios_url}. Android: {android_url}. Ваш ID: {nId}.',
+      translations: { en: 'Open {full_version_url}. Your ID: {nId}.' },
+      notes: ['Verify the required information.'],
+      dynamic_fields: ['nId'],
+      ask_user: ['Device type'],
+      status: 'active',
+      is_temporary: true,
+    },
+  ],
+})
+
 beforeAll(async () => {
   const cli = path.join(
     path.dirname(require.resolve('prisma/package.json')),
@@ -95,6 +125,7 @@ beforeAll(async () => {
 })
 beforeEach(async () => {
   await prismaSupport.zhoraKbEntry.deleteMany()
+  await prismaSupport.zhoraKbConfig.deleteMany()
 })
 afterAll(async () => {
   await app.close()
@@ -113,8 +144,9 @@ describe('Zhora KB internal management API', () => {
     expect(response.statusCode).toBe(201)
     const entry = response.json()
     expect(entry).toMatchObject({
-      questions: ['How to log in?'],
-      answerRu: 'Ответ',
+      question: 'How to log in?',
+      variants: ['Login help?'],
+      answer_ru: 'Ответ',
       translations: {},
       domains: [],
       status: 'draft',
@@ -133,6 +165,7 @@ describe('Zhora KB internal management API', () => {
     })
     expect(update.statusCode).toBe(200)
     expect(update.json()).toMatchObject({
+      id: entry.id,
       status: 'active',
       translations: { en: 'Answer' },
       domains: ['binodex.io'],
@@ -150,10 +183,10 @@ describe('Zhora KB internal management API', () => {
   it('filters and paginates the management list, including drafts', async () => {
     await create()
     await create({ ...payload(), status: 'active' })
-    await create({ ...payload(), tag: 'payments' })
+    await create({ ...payload(), category: 'payments' })
     const list = await app.inject({
       method: 'GET',
-      url: `${prefix}?tag=account&limit=1&offset=1`,
+      url: `${prefix}?category=account&limit=1&offset=1`,
       headers,
     })
     expect(list.statusCode).toBe(200)
@@ -180,7 +213,9 @@ describe('Zhora KB internal management API', () => {
       ).statusCode
     ).toBe(204)
     expect(
-      await prismaSupport.zhoraKbEntry.findUnique({ where: { id: entry.id } })
+      await prismaSupport.zhoraKbEntry.findUnique({
+        where: { id: entry.id },
+      })
     ).toBeNull()
     for (const method of ['GET', 'PATCH', 'DELETE'] as const) {
       const response = await app.inject({
@@ -198,8 +233,9 @@ describe('Zhora KB internal management API', () => {
 
   it('rejects invalid content, languages, domains, status, pagination and empty updates', async () => {
     for (const invalid of [
-      { questions: [] },
-      { answerRu: ' ' },
+      { question: ' ' },
+      { variants: [' '] },
+      { answer_ru: ' ' },
       { translations: { pl: 'Answer' } },
       { translations: { en: ' ' } },
       { domains: ['https://binodex.io/path'] },
@@ -296,11 +332,11 @@ describe('Zhora KB internal management API', () => {
 
   it('imports JSON with defaults and explicit active status; repeated imports only create new entries', async () => {
     const entries = [
-      { questions: [' Question '], answerRu: ' Ответ ', tag: 'account' },
+      { question: ' Question ', answer_ru: ' Ответ ', category: 'account' },
       {
-        questions: ['Other question'],
-        answerRu: 'Другой ответ',
-        tag: 'payments',
+        question: 'Other question',
+        answer_ru: 'Другой ответ',
+        category: 'payments',
         status: 'active',
         translations: { en: ' Answer ' },
         domains: ['BINODEX.IO'],
@@ -314,11 +350,12 @@ describe('Zhora KB internal management API', () => {
     expect(response.statusCode).toBe(201)
     expect(response.json()).toEqual({ created: 2 })
     const stored = await prismaSupport.zhoraKbEntry.findMany({
-      orderBy: { tag: 'asc' },
+      orderBy: { category: 'asc' },
     })
     expect(stored[0]).toMatchObject({
-      questions: ['Question'],
-      answerRu: 'Ответ',
+      question: 'Question',
+      variants: [],
+      answer_ru: 'Ответ',
       status: 'draft',
       domains: [],
       translations: {},
@@ -339,19 +376,23 @@ describe('Zhora KB internal management API', () => {
   it('imports CSV with JSON cells, escaped quotes, commas and multiline answers', async () => {
     const answer = 'Ответ, с "кавычками"\nи переносом строки'
     const csv =
-      '\uFEFFquestions,answerRu,tag,translations,domains,status\r\n' +
+      '\uFEFFid,question,variants,answer_ru,category,translations,domains,status,notes,is_temporary\r\n' +
       [
         [
-          ['Question', 'Variant'],
+          'CSV_001',
+          'Question',
+          ['Variant'],
           answer,
           'account',
           { en: 'Answer' },
           ['binodex.io'],
           'active',
+          ['Check the request.'],
+          true,
         ]
           .map(csvCell)
           .join(','),
-        [['Second'], 'Второй ответ', 'account', '', '', '']
+        ['', 'Second', '', 'Второй ответ', 'account', '', '', '', '', '']
           .map(csvCell)
           .join(','),
       ].join('\r\n')
@@ -362,20 +403,121 @@ describe('Zhora KB internal management API', () => {
     expect(stored).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          questions: ['Question', 'Variant'],
-          answerRu: answer,
+          question: 'Question',
+          variants: ['Variant'],
+          answer_ru: answer,
           translations: { en: 'Answer' },
           domains: ['binodex.io'],
           status: 'active',
+          notes: ['Check the request.'],
+          is_temporary: true,
         }),
         expect.objectContaining({
-          questions: ['Second'],
+          question: 'Second',
+          variants: [],
           translations: {},
           domains: [],
           status: 'draft',
         }),
       ])
     )
+  })
+
+  it('imports entries and shared links while preserving KB placeholders', async () => {
+    const input = document()
+    input.entries.push({
+      ...input.entries[0]!,
+      // Source labels do not determine database identity, even if repeated.
+      id: 'TEST_001',
+      is_temporary: false,
+    })
+    const response = await upload(JSON.stringify(input))
+    expect(response.statusCode).toBe(201)
+    expect(response.json()).toEqual({ created: 2 })
+    const list = await app.inject({ method: 'GET', url: prefix, headers })
+    expect(
+      new Set(list.json().items.map((item: { id: string }) => item.id)).size
+    ).toBe(2)
+    const entry = list
+      .json()
+      .items.find((item: { is_temporary: boolean }) => item.is_temporary)
+    expect(entry).toMatchObject({
+      question: 'How to open the full version?',
+      variants: input.entries[0]!.variants,
+      answer_ru: input.entries[0]!.answer_ru,
+      category: 'account',
+      notes: input.entries[0]!.notes,
+      dynamic_fields: ['nId'],
+      ask_user: ['Device type'],
+      status: 'active',
+      is_temporary: true,
+      domains: [],
+      translations: input.entries[0]!.translations,
+    })
+    expect(entry).not.toHaveProperty('code')
+    expect(entry).not.toHaveProperty('source')
+    expect(entry).not.toHaveProperty('version')
+    expect(entry).not.toHaveProperty('config')
+    const config = await app.inject({
+      method: 'GET',
+      url: `${prefix}/config`,
+      headers,
+    })
+    expect(config.json()).toMatchObject({
+      full_version_url: input.config.full_version_url,
+      ios_url: input.config.ios_url,
+      android_url: input.config.android_url,
+    })
+    const changed = await app.inject({
+      method: 'PATCH',
+      url: `${prefix}/config`,
+      headers,
+      payload: {
+        ios_url: 'https://example.test/new-ios',
+        updatedById: 'test-user-2',
+      },
+    })
+    expect(changed.statusCode).toBe(200)
+    expect(changed.json().ios_url).toBe('https://example.test/new-ios')
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: `${prefix}/${entry.id}`,
+          headers,
+        })
+      ).json().answer_ru
+    ).toBe(input.entries[0]!.answer_ru)
+    const secondImport = await upload(JSON.stringify(document()))
+    expect(secondImport.statusCode).toBe(201)
+    const retained = await app.inject({
+      method: 'GET',
+      url: `${prefix}/config`,
+      headers,
+    })
+    expect(retained.json().ios_url).toBe('https://example.test/new-ios')
+    expect(entry.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    )
+    const updated = await app.inject({
+      method: 'PATCH',
+      url: `${prefix}/${entry.id}`,
+      headers,
+      payload: {
+        notes: ['Updated check.'],
+        dynamic_fields: ['request_status'],
+        ask_user: [],
+        is_temporary: false,
+        updatedById: 'test-user-2',
+      },
+    })
+    expect(updated.statusCode).toBe(200)
+    expect(updated.json()).toMatchObject({
+      notes: ['Updated check.'],
+      dynamic_fields: ['request_status'],
+      ask_user: [],
+      is_temporary: false,
+    })
   })
 
   it('rejects an invalid record before writing any part of the import', async () => {
@@ -388,10 +530,10 @@ describe('Zhora KB internal management API', () => {
     expect(response.json()).toMatchObject({ code: 'KB_IMPORT_INVALID' })
     expect(response.json().message).toContain('Record 2')
     const csv =
-      'questions,answerRu,tag\n' +
+      'question,variants,answer_ru,category\n' +
       [
-        [['Valid'], 'Ответ', 'account'].map(csvCell).join(','),
-        ['not-json', 'Ответ', 'account'].map(csvCell).join(','),
+        ['Valid', ['Variant'], 'Ответ', 'account'].map(csvCell).join(','),
+        ['Question', 'not-json', 'Ответ', 'account'].map(csvCell).join(','),
       ].join('\n')
     const invalidCsv = await upload(csv, 'kb.csv')
     expect(invalidCsv.statusCode).toBe(400)
@@ -409,8 +551,8 @@ describe('Zhora KB internal management API', () => {
       expect((await upload(content)).statusCode).toBe(400)
     }
     for (const content of [
-      'questions,answerRu,tag\n"unclosed',
-      'questions,questions\nfirst,second',
+      'question,answer_ru,category\n"unclosed',
+      'question,question\nfirst,second',
       'unknown\nvalue',
     ]) {
       expect((await upload(content, 'kb.csv')).statusCode).toBe(400)

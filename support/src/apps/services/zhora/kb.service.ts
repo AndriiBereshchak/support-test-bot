@@ -3,12 +3,21 @@ import { Prisma } from '@prisma-support'
 import { prismaSupport } from '@config/database'
 import { ApiError } from '@core/errors/api-error'
 import { enqueueKbEmbeddings } from './kb-search.service'
+import {
+  saveImportedZhoraKbConfig,
+  type ZhoraKbConfigInput,
+} from './kb-config.service'
 
 export interface ZhoraKbInput {
-  questions: string[]
-  answerRu: string
+  question: string
+  variants?: string[]
+  answer_ru: string
   translations?: Record<string, string>
-  tag: string
+  category: string
+  notes?: string[]
+  dynamic_fields?: string[]
+  ask_user?: string[]
+  is_temporary?: boolean
   domains?: string[]
   status?: 'draft' | 'active'
 }
@@ -17,16 +26,21 @@ export interface ZhoraKbQuery {
   limit?: number
   offset?: number
   status?: 'draft' | 'active'
-  tag?: string
+  category?: string
 }
 
 // Keep internal index metadata out of the KB management response.
 const entrySelect = {
   id: true,
-  questions: true,
-  answerRu: true,
+  question: true,
+  variants: true,
+  answer_ru: true,
   translations: true,
-  tag: true,
+  category: true,
+  notes: true,
+  dynamic_fields: true,
+  ask_user: true,
+  is_temporary: true,
   domains: true,
   status: true,
   updatedById: true,
@@ -36,10 +50,11 @@ const entrySelect = {
 
 function entryData(input: Partial<ZhoraKbInput>) {
   return {
-    ...(input.questions !== undefined && {
-      questions: input.questions.map((question) => question.trim()),
+    ...(input.question !== undefined && { question: input.question.trim() }),
+    ...(input.variants !== undefined && {
+      variants: input.variants.map((variant) => variant.trim()),
     }),
-    ...(input.answerRu !== undefined && { answerRu: input.answerRu.trim() }),
+    ...(input.answer_ru !== undefined && { answer_ru: input.answer_ru.trim() }),
     ...(input.translations !== undefined && {
       translations: Object.fromEntries(
         Object.entries(input.translations).map(([language, text]) => [
@@ -48,7 +63,19 @@ function entryData(input: Partial<ZhoraKbInput>) {
         ])
       ),
     }),
-    ...(input.tag !== undefined && { tag: input.tag.trim() }),
+    ...(input.category !== undefined && { category: input.category.trim() }),
+    ...(input.notes !== undefined && {
+      notes: input.notes.map((text) => text.trim()),
+    }),
+    ...(input.dynamic_fields !== undefined && {
+      dynamic_fields: input.dynamic_fields.map((text) => text.trim()),
+    }),
+    ...(input.ask_user !== undefined && {
+      ask_user: input.ask_user.map((text) => text.trim()),
+    }),
+    ...(input.is_temporary !== undefined && {
+      is_temporary: input.is_temporary,
+    }),
     ...(input.domains !== undefined && {
       domains: [
         ...new Set(input.domains.map((domain) => domain.toLowerCase())),
@@ -62,9 +89,10 @@ function createData(input: ZhoraKbInput, authorId: string) {
   const data = entryData(input)
   return {
     ...data,
-    questions: input.questions.map((question) => question.trim()),
-    answerRu: input.answerRu.trim(),
-    tag: input.tag.trim(),
+    id: randomUUID(),
+    question: input.question.trim(),
+    answer_ru: input.answer_ru.trim(),
+    category: input.category.trim(),
     translations: data.translations ?? {},
     updatedById: authorId,
   }
@@ -86,14 +114,13 @@ export async function createZhoraKbEntry(
 
 export async function importZhoraKbEntries(
   entries: ZhoraKbInput[],
-  authorId: string
+  authorId: string,
+  config?: ZhoraKbConfigInput
 ) {
   // Allocate IDs before the bulk insert so the queue targets this import only.
-  const data = entries.map((entry) => ({
-    id: randomUUID(),
-    ...createData(entry, authorId),
-  }))
+  const data = entries.map((entry) => createData(entry, authorId))
   return prismaSupport.$transaction(async (tx) => {
+    if (config) await saveImportedZhoraKbConfig(tx, config, authorId)
     const result = await tx.zhoraKbEntry.createMany({ data })
     await enqueueKbEmbeddings(
       data
@@ -110,7 +137,7 @@ export async function listZhoraKbEntries(query: ZhoraKbQuery) {
   const offset = query.offset ?? 0
   const where: Prisma.ZhoraKbEntryWhereInput = {
     ...(query.status !== undefined && { status: query.status }),
-    ...(query.tag !== undefined && { tag: query.tag.trim() }),
+    ...(query.category !== undefined && { category: query.category.trim() }),
   }
   const [items, total] = await prismaSupport.$transaction([
     prismaSupport.zhoraKbEntry.findMany({
@@ -162,8 +189,9 @@ export async function updateZhoraKbEntry(
       })
       if (
         entry.status === 'active' &&
-        (input.questions !== undefined ||
-          input.answerRu !== undefined ||
+        (input.question !== undefined ||
+          input.variants !== undefined ||
+          input.answer_ru !== undefined ||
           input.status === 'active')
       ) {
         await enqueueKbEmbeddings([id], tx)
