@@ -1,6 +1,6 @@
 import { prismaSupport } from '@config/database'
 import { logger } from '@config/logger'
-import { sendPlainMessage } from '@telegram/api'
+import { attachZhoraReplyButton, sendPlainMessage } from '@telegram/api'
 import { splitText } from '@telegram/text'
 import { enqueueZhoraJob } from './job-enqueue.service'
 import type { OpenRouterInput } from './openrouter'
@@ -203,6 +203,13 @@ async function deliverPendingTranslations() {
           sendingUntil: complete ? null : new Date(Date.now() + SEND_LEASE_MS),
         },
       })
+      if (complete) {
+        await attachZhoraReplyButton({
+          chatId: Number(row.message.ticket.tgChatId!),
+          telegramMessageId: sentId,
+          customerMessageId: row.messageId,
+        })
+      }
     }
   }
 }

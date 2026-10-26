@@ -55,6 +55,7 @@ export function telegramStub() {
     })),
     postTicketCard: vi.fn(async () => (nextMessageId += 1)),
     relayUserMessage: vi.fn(async () => (nextMessageId += 1)),
+    attachZhoraReplyButton: vi.fn(async () => true),
     sendToTopic: vi.fn(async () => (nextMessageId += 1)),
     sendTypingToTopic: vi.fn(async () => undefined),
     sendPlainMessage: vi.fn(async () => (nextMessageId += 1)),

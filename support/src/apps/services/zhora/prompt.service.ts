@@ -16,7 +16,8 @@ const languages = {
   it: 'Italian',
 } as const
 
-export type ZhoraReplyLanguage = keyof typeof languages
+// Incoming detection is not limited to the eleven manual translation buttons.
+export type ZhoraReplyLanguage = string
 
 export interface ZhoraReply {
   answer: string
@@ -115,7 +116,11 @@ export function buildZhoraReplyPrompt(
   context: ZhoraContext,
   language: ZhoraReplyLanguage
 ): OpenRouterInput {
-  if (!Object.hasOwn(languages, language)) {
+  if (
+    !/^[a-z]{2,3}(?:-[a-z0-9]{2,8})?$/.test(language) ||
+    language === 'und' ||
+    language === 'uk'
+  ) {
     throw new ApiError(
       'Unsupported reply language',
       400,
@@ -125,7 +130,10 @@ export function buildZhoraReplyPrompt(
   const domain = context.ticket.originDomain?.trim().toLowerCase() || null
   const card = context.userCard
   const payload = {
-    language: { code: language, name: languages[language] },
+    language: {
+      code: language,
+      name: languages[language as keyof typeof languages] ?? language,
+    },
     originDomain: domain,
     targetMessage: promptMessage(context.targetMessage),
     history: context.history.map(promptMessage),

@@ -41,6 +41,7 @@ vi.mock('@apps/services/zhora/llm.service', async (importOriginal) => ({
 }))
 vi.mock('@telegram/api', () => ({
   sendPlainMessage: vi.fn(async () => 9901),
+  attachZhoraReplyButton: vi.fn(async () => true),
 }))
 
 import { prismaSupport } from '@config/database'

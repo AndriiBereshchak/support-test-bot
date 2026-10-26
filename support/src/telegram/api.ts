@@ -87,6 +87,28 @@ export const DOWNLOAD_LIMIT_BYTES = Math.min(
 // not by a webhook.
 const ALLOWED_UPDATES = ['message', 'edited_message', 'callback_query'] as const
 
+export const ZHORA_REPLY_CALLBACK_PREFIX = 'zr:'
+
+/** Put the request action on a bot-authored copy of the customer message. */
+export async function attachZhoraReplyButton(args: {
+  chatId: number
+  telegramMessageId: number
+  customerMessageId: string
+}): Promise<boolean> {
+  const bot = getBot()
+  if (!bot) return false
+  const keyboard = new InlineKeyboard().text(
+    'Жора, ответь',
+    `${ZHORA_REPLY_CALLBACK_PREFIX}${args.customerMessageId}`
+  )
+  const result = await safeCall('editMessageReplyMarkup (zhora)', () =>
+    bot.api.editMessageReplyMarkup(args.chatId, args.telegramMessageId, {
+      reply_markup: keyboard,
+    })
+  )
+  return result !== null
+}
+
 const CLOSE_NOTICE: Record<'USER' | 'AGENT' | 'SYSTEM', string> = {
   USER: '🔒 Пользователь закрыл обращение.',
   AGENT: '🔒 Обращение закрыто оператором.',

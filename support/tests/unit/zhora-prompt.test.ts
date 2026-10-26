@@ -3,7 +3,6 @@ import type { ZhoraContext } from '@apps/services/zhora/context.service'
 import {
   buildZhoraReplyPrompt,
   parseZhoraReply,
-  type ZhoraReplyLanguage,
 } from '@apps/services/zhora/prompt.service'
 
 const context = (): ZhoraContext => {
@@ -219,16 +218,19 @@ describe('Zhora reply prompt and result', () => {
     )
   })
 
-  it('uses the agreed language codes without detection or a fallback to an unsupported language', () => {
+  it('accepts a detected language beyond the eleven manual translation buttons', () => {
     expect(
       JSON.parse(buildZhoraReplyPrompt(context(), 'ua').input).language
     ).toEqual({ code: 'ua', name: 'Ukrainian' })
     expect(buildZhoraReplyPrompt(context(), 'ru').systemPrompt).toContain(
       'use the same text in both fields'
     )
-    expect(() =>
-      buildZhoraReplyPrompt(context(), 'pl' as ZhoraReplyLanguage)
-    ).toThrow('Unsupported reply language')
+    expect(
+      JSON.parse(buildZhoraReplyPrompt(context(), 'pl').input).language
+    ).toEqual({ code: 'pl', name: 'pl' })
+    expect(() => buildZhoraReplyPrompt(context(), 'und')).toThrow(
+      'Unsupported reply language'
+    )
   })
 
   it('parses a grounded draft, trims texts, deduplicates sources and preserves model uncertainty', () => {

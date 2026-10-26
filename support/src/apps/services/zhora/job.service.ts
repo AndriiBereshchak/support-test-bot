@@ -4,6 +4,7 @@ import { Prisma, type ZhoraJob } from '@prisma-support'
 import { prismaSupport } from '@config/database'
 import { ZHORA_ENABLED } from '@config/env'
 import { logger } from '@config/logger'
+import { ApiError } from '@core/errors/api-error'
 
 import { ZhoraBudgetError } from './budget.service'
 import {
@@ -20,6 +21,7 @@ import {
   type ZhoraOperation,
 } from './openrouter'
 import { runZhoraTranslationPass } from './translation.service'
+import { generateZhoraSuggestion } from './suggestion.service'
 export { enqueueZhoraJob } from './job-enqueue.service'
 
 // Technical scheduling defaults, not product limits. One job at a time per
@@ -115,16 +117,24 @@ async function executeJob(job: ZhoraJob): Promise<void> {
     result =
       job.operation === 'embedding'
         ? await indexZhoraKbJob(job)
-        : await generateZhoraTextWithJournal(readInput(job), {
-            ticketId: job.ticketId,
-            agentId: job.agentId,
-            jobId: job.id,
-          })
+        : job.operation === 'reply' &&
+            typeof job.input === 'object' &&
+            job.input !== null &&
+            !Array.isArray(job.input) &&
+            job.input.kind === 'suggestion'
+          ? await generateZhoraSuggestion(job)
+          : await generateZhoraTextWithJournal(readInput(job), {
+              ticketId: job.ticketId,
+              agentId: job.agentId,
+              jobId: job.id,
+            })
   } catch (error) {
     const code =
       error instanceof ZhoraBudgetError || error instanceof OpenRouterError
         ? error.code
-        : 'execution_unknown'
+        : error instanceof ApiError && error.code
+          ? error.code
+          : 'execution_unknown'
     const uncertain = [
       'timeout',
       'network_error',

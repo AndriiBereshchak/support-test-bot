@@ -50,7 +50,9 @@ import { getUserCard } from '@apps/services/user-card.service'
 import { escapeHtml } from '@telegram/text'
 
 import { DURATION_HINT, parseDuration } from '@core/duration'
+import { ApiError } from '@core/errors/api-error'
 import { prepareZhoraInvocation } from './zhora'
+import { requestZhoraSuggestion } from '@apps/services/zhora/suggestion.service'
 
 import {
   deleteTopicMessage,
@@ -176,6 +178,53 @@ async function reply(ctx: CommandContext, text: string): Promise<void> {
   await sendPlainMessage({ chatId: ctx.chatId, topicId: ctx.topicId, text })
 }
 
+async function requestReplyDraft(args: {
+  chatId: number
+  topicId: number | null
+  fromId: number
+  eventKey: string
+  tgMessageId?: number
+  messageId?: string
+}) {
+  const invocation = await prepareZhoraInvocation(args)
+  if (!invocation) return
+  try {
+    const { created } = await requestZhoraSuggestion({
+      eventKey: args.eventKey,
+      ticketId: invocation.ticket.id,
+      messageId: invocation.messageId,
+      agentId: invocation.agentId,
+    })
+    if (created) {
+      await sendPlainMessage({
+        chatId: args.chatId,
+        topicId: args.topicId,
+        text: 'Жора готовит черновик ответа.',
+      })
+    }
+  } catch (error) {
+    // Never expose provider errors or prompt/customer data in a topic notice.
+    const text =
+      error instanceof ApiError
+        ? error.message
+        : 'Не удалось запустить Жору. Попробуйте позже.'
+    await sendPlainMessage({ chatId: args.chatId, topicId: args.topicId, text })
+  }
+}
+
+export async function handleZhoraReplyCallback(args: {
+  chatId: number
+  topicId: number | null
+  fromId: number
+  callbackId: string
+  messageId: string
+}): Promise<void> {
+  await requestReplyDraft({
+    ...args,
+    eventKey: `reply:tap:${args.callbackId}`,
+  })
+}
+
 /**
  * Run a command. Any command shape is consumed here — an unknown one gets the
  * help text rather than being relayed, because Telegram rendered it as a
@@ -186,7 +235,15 @@ export async function handleCommand(
   command: ParsedCommand
 ): Promise<void> {
   switch (command.name) {
-    case 'zhora':
+    case 'zhora': {
+      return requestReplyDraft({
+        chatId: ctx.chatId,
+        topicId: ctx.topicId,
+        fromId: ctx.fromId,
+        eventKey: `reply:cmd:${ctx.chatId}:${ctx.message.message_id}`,
+        tgMessageId: ctx.message.reply_to_message?.message_id,
+      })
+    }
     case 'fix':
     case 'brief': {
       const invocation = await prepareZhoraInvocation({
@@ -195,10 +252,6 @@ export async function handleCommand(
         fromId: ctx.fromId,
         isBot: ctx.message.from?.is_bot,
         // /fix has its own draft-reply flow; do not require its source to be IN.
-        tgMessageId:
-          command.name === 'zhora'
-            ? ctx.message.reply_to_message?.message_id
-            : undefined,
       })
       if (!invocation) return
       // Generation/fix/brief handlers are added in their own implementation

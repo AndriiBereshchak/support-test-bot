@@ -18,6 +18,8 @@ export interface ZhoraInvocationInput {
   ticketId?: string
   /** Telegram ID of the customer message a reply/button refers to. */
   tgMessageId?: number
+  /** Database ID embedded in a bot-authored button callback. */
+  messageId?: string
 }
 
 /** Common command/callback preflight. Only reads local state and can reply to
@@ -56,11 +58,13 @@ export async function prepareZhoraInvocation(input: ZhoraInvocationInput) {
     await assertZhoraTicketAvailable(ticket)
 
     let messageId: string | undefined
-    if (input.tgMessageId !== undefined) {
+    if (input.tgMessageId !== undefined || input.messageId !== undefined) {
       const message = await prismaSupport.supportMessage.findFirst({
         where: {
           ticketId: ticket.id,
-          tgMessageId: input.tgMessageId,
+          ...(input.messageId !== undefined
+            ? { id: input.messageId }
+            : { tgMessageId: input.tgMessageId }),
           direction: 'IN',
           deletedAt: null,
           autoKind: null,

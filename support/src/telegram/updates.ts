@@ -27,6 +27,7 @@ import {
   postTicketCard,
   sendPlainMessage,
   topicUrl,
+  ZHORA_REPLY_CALLBACK_PREFIX,
 } from '@telegram/api'
 
 import {
@@ -36,6 +37,7 @@ import {
   TOPIC_NAME_HINT,
   findExchangeUserByNId,
   handleCommand,
+  handleZhoraReplyCallback,
   handleDepositsCallback,
   parseCommand,
   type CommandContext,
@@ -114,6 +116,20 @@ async function onCallbackQuery(query: CallbackQuery): Promise<void> {
   const message = query.message
   if (!message) return
   if (message.chat.id !== Number(TELEGRAM_CHAT_ID)) return
+
+  if (data.startsWith(ZHORA_REPLY_CALLBACK_PREFIX)) {
+    const fromId = query.from?.id
+    const messageId = data.slice(ZHORA_REPLY_CALLBACK_PREFIX.length)
+    if (fromId == null || !/^[0-9a-f-]{36}$/i.test(messageId)) return
+    await handleZhoraReplyCallback({
+      chatId: message.chat.id,
+      topicId: message.message_thread_id ?? null,
+      fromId,
+      callbackId: query.id,
+      messageId,
+    })
+    return
+  }
 
   if (data.startsWith(DEPOSITS_CALLBACK_PREFIX)) {
     await handleDepositsCallback({

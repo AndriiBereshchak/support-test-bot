@@ -8,6 +8,8 @@ vi.mock('@config/env', async (importOriginal) => ({
   get ZHORA_ENABLED() {
     return settings.enabled
   },
+  ZHORA_OPENROUTER_API_KEY: 'synthetic-telegram-test-key',
+  ZHORA_MODEL_REPLY: 'test/reply',
 }))
 vi.mock('@apps/services/push.service', () => ({ pushToUser: vi.fn() }))
 vi.mock('@telegram/api', async (importOriginal) => ({
@@ -26,6 +28,7 @@ import {
   agentEditUpdate,
   agentMediaUpdate,
   agentMessageUpdate,
+  callbackUpdate,
   generalMessageUpdate,
 } from './_telegram-stub'
 
@@ -81,6 +84,7 @@ afterEach(async () => {
   vi.restoreAllMocks()
   prismaSupport.supportMute.findUnique = originalMuteRead
   vi.unstubAllGlobals()
+  await prismaSupport.zhoraJob.deleteMany({ where: { ticketId: ticket.id } })
   await cleanupTestUser(user.userId)
   if (agents.length)
     await prismaSupport.supportAgent.deleteMany({
@@ -90,6 +94,34 @@ afterEach(async () => {
 })
 
 describe('Zhora Telegram preflight', () => {
+  it('deduplicates one command or tap while allowing a new request', async () => {
+    await prismaSupport.supportTicket.update({
+      where: { id: ticket.id },
+      data: { detectedLang: 'pl', detectedLangSeq: target.seq },
+    })
+    const first = command()
+    await handleUpdate(first)
+    await handleUpdate(first)
+    expect(await prismaSupport.zhoraSuggestion.count()).toBe(1)
+
+    const tapped = callbackUpdate({
+      topicId: ticket.tgTopicId!,
+      messageId: target.tgMessageId!,
+      fromId,
+      data: `${telegram.ZHORA_REPLY_CALLBACK_PREFIX}${target.id}`,
+    })
+    await handleUpdate(tapped)
+    await handleUpdate(tapped)
+    expect(await prismaSupport.zhoraSuggestion.count()).toBe(2)
+    expect(sent()).toHaveBeenCalledTimes(2)
+    expect(pushToUser).not.toHaveBeenCalled()
+    expect(
+      await prismaSupport.supportMessage.count({
+        where: { ticketId: ticket.id, direction: 'OUT' },
+      })
+    ).toBe(0)
+  })
+
   it('consumes commands and photo captions privately without creating customer replies or AI calls', async () => {
     const updates = ['zhora', 'fix', 'brief'].map((name) =>
       agentMessageUpdate({
@@ -119,10 +151,13 @@ describe('Zhora Telegram preflight', () => {
     )
     for (const update of updates) await handleUpdate(update)
     expect(sent()).toHaveBeenCalledTimes(4)
+    expect(sent().mock.calls[0]![0].text).toContain(
+      'Не удалось определить язык этого сообщения'
+    )
     expect(
-      sent().mock.calls.every(([message]) =>
-        message.text.includes('пока недоступна')
-      )
+      sent()
+        .mock.calls.slice(1)
+        .every(([message]) => message.text.includes('пока недоступна'))
     ).toBe(true)
     expect(
       await prismaSupport.supportMessage.count({

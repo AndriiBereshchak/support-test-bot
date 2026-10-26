@@ -279,6 +279,7 @@ model SupportMessage {
 
   attachments SupportAttachment[]
   translation ZhoraTranslation?
+  zhoraSuggestions ZhoraSuggestion[]
 
   @@unique([ticketId, seq])
   @@index([ticketId, createdAt])
@@ -487,6 +488,7 @@ model ZhoraJob {
   result         Json?
   errorCode      String?   @map("error_code") @db.VarChar(64)
   translation    ZhoraTranslation?
+  suggestion     ZhoraSuggestion?
 
   @@index([status, createdAt])
   @@index([status, leaseExpiresAt])
@@ -512,6 +514,21 @@ model ZhoraTranslation {
 
   @@index([sentAt, sendingUntil])
   @@map("zhora_translations")
+}
+
+// An operator-requested draft, linked to the customer message and the one
+// paid job. The validated reply lives in job.result until the preview flow.
+model ZhoraSuggestion {
+  id              String         @id @default(uuid()) @db.Uuid
+  jobId           String         @unique @map("job_id") @db.Uuid
+  job             ZhoraJob       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  targetMessageId String         @map("target_message_id") @db.Uuid
+  targetMessage   SupportMessage @relation(fields: [targetMessageId], references: [id], onDelete: Cascade)
+  language        String         @db.VarChar(16)
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@index([targetMessageId, createdAt])
+  @@map("zhora_suggestions")
 }
 
 // Content fields follow the KB document; id identifies a stored copy.

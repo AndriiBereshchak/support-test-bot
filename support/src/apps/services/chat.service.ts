@@ -360,6 +360,13 @@ export async function relayIncomingMessage(
     }
 
     await attachTelegramMessageId(message.id, tgMessageId)
+    if (ZHORA_ENABLED && ticket.tgChatId !== null) {
+      await telegram.attachZhoraReplyButton({
+        chatId: Number(ticket.tgChatId),
+        telegramMessageId: tgMessageId,
+        customerMessageId: message.id,
+      })
+    }
     return { status: 'relayed', tgMessageId }
   } catch (err) {
     logger.error(
