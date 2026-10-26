@@ -2,6 +2,7 @@ import { stat } from 'fs/promises'
 import path from 'path'
 
 import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
+import type { InlineKeyboardMarkup } from 'grammy/types'
 
 import type { SupportAttachment, SupportTicket } from '@prisma-support'
 
@@ -88,6 +89,7 @@ export const DOWNLOAD_LIMIT_BYTES = Math.min(
 const ALLOWED_UPDATES = ['message', 'edited_message', 'callback_query'] as const
 
 export const ZHORA_REPLY_CALLBACK_PREFIX = 'zr:'
+export const ZHORA_SEND_CALLBACK_PREFIX = 'zs:'
 
 /** Put the request action on a bot-authored copy of the customer message. */
 export async function attachZhoraReplyButton(args: {
@@ -334,6 +336,7 @@ export async function sendPlainMessage(args: {
   topicId: number | null
   text: string
   replyToMessageId?: number
+  replyMarkup?: InlineKeyboardMarkup
 }): Promise<number | null> {
   const bot = getBot()
   if (!bot) return null
@@ -343,7 +346,8 @@ export async function sendPlainMessage(args: {
     args.topicId,
     args.text,
     undefined,
-    args.replyToMessageId
+    args.replyToMessageId,
+    args.replyMarkup
   )
 }
 
@@ -353,10 +357,12 @@ async function sendPlainToTopic(
   topicId: number | null,
   text: string,
   failure?: RelayFailure,
-  replyToMessageId?: number
+  replyToMessageId?: number,
+  replyMarkup?: InlineKeyboardMarkup
 ): Promise<number | null> {
   let firstId: number | null = null
-  for (const chunk of splitText(text)) {
+  const chunks = splitText(text)
+  for (const [index, chunk] of chunks.entries()) {
     const sent = await safeCall(
       'sendMessage (relay)',
       () =>
@@ -366,6 +372,9 @@ async function sendPlainToTopic(
             ? { reply_parameters: { message_id: replyToMessageId } }
             : {}),
           link_preview_options: { is_disabled: true },
+          ...(index === chunks.length - 1 && replyMarkup
+            ? { reply_markup: replyMarkup }
+            : {}),
         }),
       failure
     )

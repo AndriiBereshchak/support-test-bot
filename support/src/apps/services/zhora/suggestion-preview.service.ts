@@ -1,6 +1,6 @@
 import { prismaSupport } from '@config/database'
 import { logger } from '@config/logger'
-import { sendPlainMessage } from '@telegram/api'
+import { sendPlainMessage, ZHORA_SEND_CALLBACK_PREFIX } from '@telegram/api'
 import { splitText } from '@telegram/text'
 
 const SEND_LEASE_MS = 60_000
@@ -12,6 +12,7 @@ function previewText(result: unknown): string {
   const value = result as Record<string, unknown>
   if (
     typeof value.answer !== 'string' ||
+    !value.answer.trim() ||
     typeof value.answerRu !== 'string' ||
     typeof value.needsReview !== 'boolean' ||
     !Array.isArray(value.sources)
@@ -83,9 +84,11 @@ export async function runZhoraSuggestionPreviewPass(): Promise<void> {
     if (!claimed.count) continue
 
     let body = 'Не удалось подготовить черновик Жоры. Попробуйте ещё раз.'
+    let sendable = false
     if (row.job.status === 'completed') {
       try {
         body = previewText(row.job.result)
+        sendable = true
       } catch {
         logger.warn('[zhora] completed suggestion has invalid result')
       }
@@ -100,6 +103,20 @@ export async function runZhoraSuggestionPreviewPass(): Promise<void> {
           topicId: row.targetMessage.ticket.tgTopicId!,
           replyToMessageId: row.targetMessage.tgMessageId ?? undefined,
           text: chunks[index]!,
+          ...(sendable && index === chunks.length - 1
+            ? {
+                replyMarkup: {
+                  inline_keyboard: [
+                    [
+                      {
+                        text: 'Отправить',
+                        callback_data: `${ZHORA_SEND_CALLBACK_PREFIX}${row.id}`,
+                      },
+                    ],
+                  ],
+                },
+              }
+            : {}),
         })
       } catch {
         logger.warn('[zhora] suggestion preview delivery failed')

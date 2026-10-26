@@ -204,6 +204,16 @@ describe('Zhora answer requests', () => {
     expect(vi.mocked(sendPlainMessage).mock.calls[0]![0]).toMatchObject({
       topicId: 777,
       text: expect.stringContaining('Источник: KB DEP_001 «Deposit question»'),
+      replyMarkup: {
+        inline_keyboard: [
+          [
+            {
+              text: 'Отправить',
+              callback_data: `zs:${first.suggestion.id}`,
+            },
+          ],
+        ],
+      },
     })
     expect(
       (
@@ -264,6 +274,14 @@ describe('Zhora answer requests', () => {
     })
     await runZhoraSuggestionPreviewPass()
     expect(vi.mocked(sendPlainMessage)).toHaveBeenCalledTimes(3)
+    expect(
+      vi.mocked(sendPlainMessage).mock.calls[0]![0].replyMarkup
+    ).toBeUndefined()
+    expect(vi.mocked(sendPlainMessage).mock.calls[2]![0].replyMarkup).toEqual({
+      inline_keyboard: [
+        [{ text: 'Отправить', callback_data: `zs:${suggestion.id}` }],
+      ],
+    })
     expect(vi.mocked(sendPlainMessage).mock.calls[2]![0].text).toContain(
       'Источник: ⚠ в базе нет ответа'
     )
@@ -280,6 +298,41 @@ describe('Zhora answer requests', () => {
       })
     ).toBe(0)
   })
+
+  it.each(['failed', 'uncertain', 'malformed'])(
+    'does not offer sending for an unusable result: %s',
+    async (state) => {
+      const { ticket } = await customerMessage('Question', 'en')
+      await prismaSupport.supportTicket.update({
+        where: { id: ticket.id },
+        data: { tgChatId: -1002000000001n, tgTopicId: 779 },
+      })
+      const { suggestion } = await requestZhoraSuggestion({
+        ticketId: ticket.id,
+        eventKey: `reply:unusable:${state}`,
+      })
+      await prismaSupport.zhoraJob.update({
+        where: { id: suggestion.jobId },
+        data: {
+          status: state === 'malformed' ? 'completed' : state,
+          result: {
+            answer: '',
+            answerRu: 'RU',
+            sources: [],
+            needsReview: true,
+          },
+        },
+      })
+      await runZhoraSuggestionPreviewPass()
+      expect(vi.mocked(sendPlainMessage)).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(sendPlainMessage).mock.calls[0]![0]).toMatchObject({
+        text: expect.stringContaining('Не удалось подготовить'),
+      })
+      expect(
+        vi.mocked(sendPlainMessage).mock.calls[0]![0].replyMarkup
+      ).toBeUndefined()
+    }
+  )
 
   it('does not use a previous language while a newer message is pending', async () => {
     const { ticket } = await customerMessage('Hello', 'en')

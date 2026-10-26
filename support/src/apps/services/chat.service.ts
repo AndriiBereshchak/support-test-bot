@@ -550,6 +550,8 @@ export interface AgentSendInput {
   text?: string | null
   agentId?: string | null
   tgMessageId: number
+  /** Stable identity for an operator-approved draft across callback retries. */
+  dedupeKey?: string
   /** Attachment rows already persisted by the Telegram download step. */
   attachmentIds?: string[]
 }
@@ -557,8 +559,8 @@ export interface AgentSendInput {
 /**
  * A reply written by support inside the Telegram topic.
  *
- * `dedupeKey` is derived from the Telegram coordinates, so a webhook
- * redelivery (Telegram retries until it gets a 2xx) cannot double-post.
+ * By default `dedupeKey` is derived from the Telegram coordinates. Approved
+ * drafts supply their own stable key, so retries cannot double-post either.
  *
  * Returns `'closed'` when the ticket is no longer open — the caller reports
  * that back into the topic so the agent is not left believing they delivered
@@ -594,7 +596,9 @@ export async function agentSendMessage(
       agentId,
       tgMessageId,
       attachmentIds,
-      dedupeKey: `tg:${ticket.tgChatId?.toString() ?? '0'}:${tgMessageId}`,
+      dedupeKey:
+        input.dedupeKey ??
+        `tg:${ticket.tgChatId?.toString() ?? '0'}:${tgMessageId}`,
       requireOpen: true,
     })
   } catch (err) {

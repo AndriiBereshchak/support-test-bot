@@ -28,6 +28,7 @@ import {
   sendPlainMessage,
   topicUrl,
   ZHORA_REPLY_CALLBACK_PREFIX,
+  ZHORA_SEND_CALLBACK_PREFIX,
 } from '@telegram/api'
 
 import {
@@ -42,6 +43,7 @@ import {
   parseCommand,
   type CommandContext,
 } from './commands'
+import { handleZhoraSendCallback } from './zhora-send'
 
 /**
  * Telegram update router — the single entry point the Fastify webhook route
@@ -116,6 +118,27 @@ async function onCallbackQuery(query: CallbackQuery): Promise<void> {
   const message = query.message
   if (!message) return
   if (message.chat.id !== Number(TELEGRAM_CHAT_ID)) return
+
+  if (data.startsWith(ZHORA_SEND_CALLBACK_PREFIX)) {
+    const suggestionId = data.slice(ZHORA_SEND_CALLBACK_PREFIX.length)
+    if (!/^[0-9a-f-]{36}$/i.test(suggestionId) || query.from.is_bot) return
+    // General replies can carry a thread ID without being a forum topic.
+    if (
+      !message.is_topic_message ||
+      !message.message_thread_id ||
+      message.message_thread_id <= 1
+    )
+      return
+    await handleZhoraSendCallback({
+      chatId: message.chat.id,
+      topicId: message.message_thread_id,
+      fromId: query.from.id,
+      isBot: query.from.is_bot,
+      suggestionId,
+      previewMessageId: message.message_id,
+    })
+    return
+  }
 
   if (data.startsWith(ZHORA_REPLY_CALLBACK_PREFIX)) {
     const fromId = query.from?.id

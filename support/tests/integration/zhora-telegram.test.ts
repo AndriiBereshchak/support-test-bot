@@ -1,4 +1,4 @@
-import { randomInt } from 'node:crypto'
+import { randomInt, randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupportMessage, SupportTicket } from '@prisma-support'
 
@@ -19,6 +19,7 @@ vi.mock('@telegram/api', async (importOriginal) => ({
 
 import { prismaSupport } from '@config/database'
 import { pushToUser } from '@apps/services/push.service'
+import * as chat from '@apps/services/chat.service'
 import { prepareZhoraInvocation } from '@telegram/zhora'
 import { handleUpdate } from '@telegram/updates'
 import * as telegram from '@telegram/api'
@@ -340,4 +341,184 @@ describe('Zhora Telegram preflight', () => {
     expect(sent().mock.calls.at(-1)![0].text).toContain('Не удалось проверить')
     expect(pushToUser).not.toHaveBeenCalled()
   })
+})
+
+async function readyDraft() {
+  await prismaSupport.supportTicket.update({
+    where: { id: ticket.id },
+    data: { lastSeq: target.seq },
+  })
+  const job = await prismaSupport.zhoraJob.create({
+    data: {
+      eventKey: `test:send:${randomUUID()}`,
+      operation: 'reply',
+      ticketId: ticket.id,
+      input: {},
+      status: 'completed',
+      result: {
+        answer: 'Please provide the withdrawal ID.',
+        answerRu: 'Укажите ID вывода.',
+        sources: [],
+        needsReview: true,
+      },
+      suggestion: {
+        create: {
+          targetMessageId: target.id,
+          language: 'en',
+          previewSentAt: new Date(),
+          previewTgMessageId: target.tgMessageId! + 1,
+        },
+      },
+    },
+    include: { suggestion: true },
+  })
+  const suggestion = job.suggestion!
+  const tap = (operatorId = fromId) =>
+    callbackUpdate({
+      topicId: ticket.tgTopicId!,
+      messageId: suggestion.previewTgMessageId!,
+      fromId: operatorId,
+      data: `${telegram.ZHORA_SEND_CALLBACK_PREFIX}${suggestion.id}`,
+    })
+  return { suggestion, tap }
+}
+
+const outgoing = () =>
+  prismaSupport.supportMessage.findMany({
+    where: { ticketId: ticket.id, direction: 'OUT' },
+  })
+
+describe('Zhora operator-approved sending', () => {
+  it('sends only the saved answer as the clicking operator, once across concurrent taps and retries', async () => {
+    const agent = await prismaSupport.supportAgent.create({
+      data: { tgUserId: BigInt(fromId), displayName: 'Clicking operator' },
+    })
+    agents.push(agent.id)
+    const { suggestion, tap } = await readyDraft()
+    expect(await outgoing()).toHaveLength(0)
+    const update = tap()
+    await Promise.all([handleUpdate(update), handleUpdate(update)])
+    await handleUpdate(tap(fromId + 1))
+    expect(await outgoing()).toMatchObject([
+      {
+        agentId: agent.id,
+        text: 'Please provide the withdrawal ID.',
+        dedupeKey: `zhora:send:${suggestion.id}`,
+        autoKind: null,
+      },
+    ])
+    expect(pushToUser).toHaveBeenCalledTimes(1)
+    expect(sent().mock.calls.at(-1)![0].text).toContain('уже отправлен')
+  })
+
+  it('keeps the existing neutral attribution for an operator without a profile', async () => {
+    const { tap } = await readyDraft()
+    await handleUpdate(tap())
+    expect(await outgoing()).toMatchObject([{ agentId: null }])
+  })
+
+  it('blocks delivery if the ticket closes after preflight, before the append', async () => {
+    const { tap } = await readyDraft()
+    const send = chat.agentSendMessage
+    vi.spyOn(chat, 'agentSendMessage').mockImplementationOnce(async (input) => {
+      await prismaSupport.supportTicket.update({
+        where: { id: ticket.id },
+        data: { status: 'CLOSED' },
+      })
+      return send(input)
+    })
+    await handleUpdate(tap())
+    expect(await outgoing()).toHaveLength(0)
+    expect(pushToUser).not.toHaveBeenCalled()
+    expect(sent().mock.calls.at(-1)![0].text).toContain('Ответ не отправлен')
+  })
+
+  it.each([
+    'closed',
+    'muted',
+    'new-ticket',
+    'deleted-source',
+    'disabled',
+    'mute-read-error',
+  ] as const)('rechecks access at click time: %s', async (reason) => {
+    const { tap } = await readyDraft()
+    if (reason === 'closed' || reason === 'new-ticket') {
+      await prismaSupport.supportTicket.update({
+        where: { id: ticket.id },
+        data: { status: 'CLOSED' },
+      })
+    }
+    if (reason === 'new-ticket') {
+      await prismaSupport.supportTicket.create({
+        data: {
+          ...user,
+          tgChatId: ticket.tgChatId,
+          tgTopicId: ticket.tgTopicId,
+        },
+      })
+    }
+    if (reason === 'muted') {
+      await prismaSupport.supportMute.create({
+        data: { ...user, mutedUntil: new Date(Date.now() + 60_000) },
+      })
+    }
+    if (reason === 'deleted-source') {
+      await prismaSupport.supportMessage.update({
+        where: { id: target.id },
+        data: { deletedAt: new Date() },
+      })
+    }
+    if (reason === 'disabled') settings.enabled = false
+    if (reason === 'mute-read-error') {
+      vi.spyOn(prismaSupport.supportMute, 'findUnique').mockRejectedValueOnce(
+        new Error('synthetic failure')
+      )
+    }
+    await handleUpdate(tap())
+    expect(await outgoing()).toHaveLength(0)
+    expect(pushToUser).not.toHaveBeenCalled()
+    expect(sent()).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    'pending-preview',
+    'failed-job',
+    'empty-answer',
+    'wrong-preview',
+    'wrong-topic',
+    'general',
+    'foreign-chat',
+    'bot',
+  ] as const)(
+    'does not deliver an unavailable or misplaced draft: %s',
+    async (reason) => {
+      const { suggestion, tap } = await readyDraft()
+      const update = tap()
+      const query = update.callback_query!
+      if (reason === 'pending-preview') {
+        await prismaSupport.zhoraSuggestion.update({
+          where: { id: suggestion.id },
+          data: { previewSentAt: null },
+        })
+      }
+      if (reason === 'failed-job' || reason === 'empty-answer') {
+        await prismaSupport.zhoraJob.update({
+          where: { id: suggestion.jobId },
+          data:
+            reason === 'failed-job'
+              ? { status: 'failed' }
+              : { result: { answer: '  ' } },
+        })
+      }
+      if (reason === 'wrong-preview') query.message!.message_id += 1
+      if (reason === 'wrong-topic') query.message!.message_thread_id! += 1
+      if (reason === 'general') query.message!.is_topic_message = undefined
+      if (reason === 'foreign-chat') query.message!.chat.id -= 1
+      if (reason === 'bot') query.from.is_bot = true
+      await handleUpdate(update)
+      expect(await outgoing()).toHaveLength(0)
+      expect(pushToUser).not.toHaveBeenCalled()
+      expect(telegram.answerCallback).toHaveBeenCalledTimes(1)
+    }
+  )
 })
