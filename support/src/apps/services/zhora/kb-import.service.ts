@@ -4,7 +4,7 @@ import { kbImportFields } from './kb.schema'
 import type { ZhoraKbInput } from './kb.service'
 import type { ZhoraKbConfigInput } from './kb-config.service'
 
-type ZhoraKbFileEntry = ZhoraKbInput & { id?: string }
+type ZhoraKbFileEntry = Omit<ZhoraKbInput, 'code'> & { id?: string }
 export type ZhoraKbImport =
   | ZhoraKbFileEntry[]
   | { entries: ZhoraKbFileEntry[]; config?: ZhoraKbConfigInput }
@@ -12,8 +12,11 @@ export type ZhoraKbImport =
 /** Called only after validating the complete file with kbImportSchema. */
 export function normalizeZhoraKbImport(data: ZhoraKbImport): ZhoraKbInput[] {
   const fileEntries = Array.isArray(data) ? data : data.entries
-  // File IDs are labels from the source, not database identities.
-  return fileEntries.map(({ id: _id, ...entry }) => entry)
+  // Preserve source labels for operators; support still generates DB UUIDs.
+  return fileEntries.map(({ id, ...entry }) => ({
+    ...entry,
+    ...(id !== undefined && { code: id }),
+  }))
 }
 
 export function parseZhoraKbImport(

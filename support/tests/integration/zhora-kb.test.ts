@@ -144,6 +144,7 @@ describe('Zhora KB internal management API', () => {
     expect(response.statusCode).toBe(201)
     const entry = response.json()
     expect(entry).toMatchObject({
+      code: null,
       question: 'How to log in?',
       variants: ['Login help?'],
       answer_ru: 'Ответ',
@@ -157,6 +158,7 @@ describe('Zhora KB internal management API', () => {
       url: `${prefix}/${entry.id}`,
       headers,
       payload: {
+        code: 'ACCOUNT_001',
         status: 'active',
         translations: { en: ' Answer ' },
         domains: ['BINODEX.IO', 'binodex.io'],
@@ -166,6 +168,7 @@ describe('Zhora KB internal management API', () => {
     expect(update.statusCode).toBe(200)
     expect(update.json()).toMatchObject({
       id: entry.id,
+      code: 'ACCOUNT_001',
       status: 'active',
       translations: { en: 'Answer' },
       domains: ['binodex.io'],
@@ -330,10 +333,15 @@ describe('Zhora KB internal management API', () => {
     expect(kept.updatedById).toBe('test-user-1')
   })
 
-  it('imports JSON with defaults and explicit active status; repeated imports only create new entries', async () => {
+  it('imports JSON with defaults and explicit active status; repeated imports create new entries', async () => {
     const entries = [
-      { question: ' Question ', answer_ru: ' Ответ ', category: 'account' },
       {
+        question: ' Question ',
+        answer_ru: ' Ответ ',
+        category: 'account',
+      },
+      {
+        id: 'TEST_002',
         question: 'Other question',
         answer_ru: 'Другой ответ',
         category: 'payments',
@@ -353,6 +361,7 @@ describe('Zhora KB internal management API', () => {
       orderBy: { category: 'asc' },
     })
     expect(stored[0]).toMatchObject({
+      code: null,
       question: 'Question',
       variants: [],
       answer_ru: 'Ответ',
@@ -362,6 +371,7 @@ describe('Zhora KB internal management API', () => {
       updatedById: 'test-user-2',
     })
     expect(stored[1]).toMatchObject({
+      code: 'TEST_002',
       status: 'active',
       translations: { en: 'Answer' },
       domains: ['binodex.io'],
@@ -403,6 +413,7 @@ describe('Zhora KB internal management API', () => {
     expect(stored).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          code: 'CSV_001',
           question: 'Question',
           variants: ['Variant'],
           answer_ru: answer,
@@ -413,6 +424,7 @@ describe('Zhora KB internal management API', () => {
           is_temporary: true,
         }),
         expect.objectContaining({
+          code: null,
           question: 'Second',
           variants: [],
           translations: {},
@@ -427,7 +439,6 @@ describe('Zhora KB internal management API', () => {
     const input = document()
     input.entries.push({
       ...input.entries[0]!,
-      // Source labels do not determine database identity, even if repeated.
       id: 'TEST_001',
       is_temporary: false,
     })
@@ -442,6 +453,7 @@ describe('Zhora KB internal management API', () => {
       .json()
       .items.find((item: { is_temporary: boolean }) => item.is_temporary)
     expect(entry).toMatchObject({
+      code: 'TEST_001',
       question: 'How to open the full version?',
       variants: input.entries[0]!.variants,
       answer_ru: input.entries[0]!.answer_ru,
@@ -454,7 +466,6 @@ describe('Zhora KB internal management API', () => {
       domains: [],
       translations: input.entries[0]!.translations,
     })
-    expect(entry).not.toHaveProperty('code')
     expect(entry).not.toHaveProperty('source')
     expect(entry).not.toHaveProperty('version')
     expect(entry).not.toHaveProperty('config')

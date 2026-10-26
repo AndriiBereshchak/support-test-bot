@@ -121,6 +121,7 @@ export interface KbSearchOptions {
 export type ZhoraKbMatch = Pick<
   ZhoraKbEntry,
   | 'id'
+  | 'code'
   | 'question'
   | 'variants'
   | 'answer_ru'
@@ -168,7 +169,7 @@ export async function findZhoraKbMatches(
     // Filtered ANN scans may otherwise stop before finding enough eligible rows.
     await tx.$executeRaw`SET LOCAL hnsw.iterative_scan = 'strict_order'`
     return tx.$queryRaw<ZhoraKbMatch[]>`
-      SELECT id, question, variants, answer_ru, translations, category, domains,
+      SELECT id, code, question, variants, answer_ru, translations, category, domains,
         notes, dynamic_fields, ask_user, is_temporary,
         1 - (embedding OPERATOR(public.<=>) ${vector}::public.vector) AS score
       FROM zhora_kb_entries

@@ -86,6 +86,7 @@ const context = (): ZhoraContext => {
     knowledge: [
       {
         id: 'kb-1',
+        code: null,
         category: 'withdrawal',
         question: 'Where is my withdrawal?',
         variants: ['Withdrawal status?'],

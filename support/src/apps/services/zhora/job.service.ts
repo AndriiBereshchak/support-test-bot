@@ -22,6 +22,7 @@ import {
 } from './openrouter'
 import { runZhoraTranslationPass } from './translation.service'
 import { generateZhoraSuggestion } from './suggestion.service'
+import { runZhoraSuggestionPreviewPass } from './suggestion-preview.service'
 export { enqueueZhoraJob } from './job-enqueue.service'
 
 // Technical scheduling defaults, not product limits. One job at a time per
@@ -216,6 +217,7 @@ export function startZhoraWorker(): () => Promise<void> {
       await runZhoraTranslationPass()
       await runZhoraJobPass(() => stopping)
       if (!stopping) await runZhoraTranslationPass()
+      if (!stopping) await runZhoraSuggestionPreviewPass()
     })()
       .catch(() => {
         logger.warn('[zhora] job pass failed; no automatic generation retry')

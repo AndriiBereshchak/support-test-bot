@@ -2,6 +2,7 @@ export const kbText = { type: 'string', pattern: '\\S' } as const
 const status = { type: 'string', enum: ['draft', 'active'] } as const
 const texts = { type: 'array', items: kbText } as const
 export const kbFields = {
+  code: kbText,
   question: kbText,
   variants: texts,
   answer_ru: kbText,
@@ -31,8 +32,9 @@ export const kbFields = {
   status,
 } as const
 
-// File IDs are accepted and discarded; support generates its own UUIDs.
-export const kbImportFields = { ...kbFields, id: kbText } as const
+// Imported file IDs become human-readable codes, not database UUIDs.
+const { code: _code, ...kbContentFields } = kbFields
+export const kbImportFields = { ...kbContentFields, id: kbText } as const
 export const kbConfigFields = {
   full_version_url: kbText,
   ios_url: kbText,

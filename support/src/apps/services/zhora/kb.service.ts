@@ -9,6 +9,7 @@ import {
 } from './kb-config.service'
 
 export interface ZhoraKbInput {
+  code?: string
   question: string
   variants?: string[]
   answer_ru: string
@@ -32,6 +33,7 @@ export interface ZhoraKbQuery {
 // Keep internal index metadata out of the KB management response.
 const entrySelect = {
   id: true,
+  code: true,
   question: true,
   variants: true,
   answer_ru: true,
@@ -50,6 +52,7 @@ const entrySelect = {
 
 function entryData(input: Partial<ZhoraKbInput>) {
   return {
+    ...(input.code !== undefined && { code: input.code.trim() }),
     ...(input.question !== undefined && { question: input.question.trim() }),
     ...(input.variants !== undefined && {
       variants: input.variants.map((variant) => variant.trim()),

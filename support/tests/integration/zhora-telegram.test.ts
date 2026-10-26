@@ -113,7 +113,8 @@ describe('Zhora Telegram preflight', () => {
     await handleUpdate(tapped)
     await handleUpdate(tapped)
     expect(await prismaSupport.zhoraSuggestion.count()).toBe(2)
-    expect(sent()).toHaveBeenCalledTimes(2)
+    // A request queues the draft; only the worker sends the finished preview.
+    expect(sent()).not.toHaveBeenCalled()
     expect(pushToUser).not.toHaveBeenCalled()
     expect(
       await prismaSupport.supportMessage.count({

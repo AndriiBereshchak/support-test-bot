@@ -132,5 +132,14 @@ export async function generateZhoraSuggestion(job: ZhoraJob) {
     agentId: job.agentId,
     jobId: job.id,
   })
-  return parseZhoraReply(result.text, context)
+  const reply = parseZhoraReply(result.text, context)
+  return {
+    ...reply,
+    // The model cites UUIDs; snapshot human-readable source labels from the
+    // exact KB context it saw. Later KB edits cannot change this preview.
+    sources: reply.sourceKbIds.map((id) => {
+      const entry = context.knowledge?.find((item) => item.id === id)!
+      return { code: entry.code, question: entry.question }
+    }),
+  }
 }

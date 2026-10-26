@@ -189,19 +189,12 @@ async function requestReplyDraft(args: {
   const invocation = await prepareZhoraInvocation(args)
   if (!invocation) return
   try {
-    const { created } = await requestZhoraSuggestion({
+    await requestZhoraSuggestion({
       eventKey: args.eventKey,
       ticketId: invocation.ticket.id,
       messageId: invocation.messageId,
       agentId: invocation.agentId,
     })
-    if (created) {
-      await sendPlainMessage({
-        chatId: args.chatId,
-        topicId: args.topicId,
-        text: 'Жора готовит черновик ответа.',
-      })
-    }
   } catch (error) {
     // Never expose provider errors or prompt/customer data in a topic notice.
     const text =

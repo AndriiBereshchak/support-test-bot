@@ -41,6 +41,10 @@ vi.mock('@apps/services/zhora/llm.service', async (importOriginal) => ({
   >()),
   generateZhoraTextWithJournal: vi.fn(),
 }))
+vi.mock('@telegram/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@telegram/api')>()),
+  sendPlainMessage: vi.fn(async () => 12345),
+}))
 
 import { prismaSupport } from '@config/database'
 import { appendMessage } from '@apps/services/message.service'
@@ -51,6 +55,8 @@ import {
 import { generateZhoraTextWithJournal } from '@apps/services/zhora/llm.service'
 import { runZhoraJobPass } from '@apps/services/zhora/job.service'
 import { requestZhoraSuggestion } from '@apps/services/zhora/suggestion.service'
+import { runZhoraSuggestionPreviewPass } from '@apps/services/zhora/suggestion-preview.service'
+import { sendPlainMessage } from '@telegram/api'
 
 beforeAll(() => {
   const cli = path.join(
@@ -119,7 +125,23 @@ describe('Zhora answer requests', () => {
       userCard: null,
       deposits: [],
       withdrawals: [],
-      knowledge: [],
+      knowledge: [
+        {
+          id: 'kb-source-1',
+          code: 'DEP_001',
+          question: 'Deposit question',
+          variants: [],
+          answer_ru: 'Проверьте депозит.',
+          translations: {},
+          category: 'deposit',
+          domains: [],
+          notes: [],
+          dynamic_fields: [],
+          ask_user: [],
+          is_temporary: false,
+          score: 0.9,
+        },
+      ],
       kbConfig: null,
       unavailable: [],
     } as unknown as ZhoraContext)
@@ -127,7 +149,7 @@ describe('Zhora answer requests', () => {
       text: JSON.stringify({
         answer: 'Proszę podać ID wypłaty.',
         answerRu: 'Пожалуйста, укажите ID вывода.',
-        sourceKbIds: [],
+        sourceKbIds: ['kb-source-1'],
         needsReview: true,
       }),
       model: 'test/reply',
@@ -172,12 +194,91 @@ describe('Zhora answer requests', () => {
       })
     ).toBe(0)
 
+    await prismaSupport.supportTicket.update({
+      where: { id: ticket.id },
+      data: { tgChatId: -1002000000001n, tgTopicId: 777 },
+    })
+    await runZhoraSuggestionPreviewPass()
+    await runZhoraSuggestionPreviewPass()
+    expect(vi.mocked(sendPlainMessage)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(sendPlainMessage).mock.calls[0]![0]).toMatchObject({
+      topicId: 777,
+      text: expect.stringContaining('Источник: KB DEP_001 «Deposit question»'),
+    })
+    expect(
+      (
+        await prismaSupport.zhoraSuggestion.findUniqueOrThrow({
+          where: { id: first.suggestion.id },
+        })
+      ).previewSentAt
+    ).toBeInstanceOf(Date)
+
     const deliberate = await requestZhoraSuggestion({
       ...input,
       eventKey: 'reply:cmd:-100:124',
     })
     expect(deliberate.created).toBe(true)
     expect(await prismaSupport.zhoraJob.count()).toBe(2)
+  })
+
+  it('resumes a long preview after partial delivery', async () => {
+    const { ticket } = await customerMessage('Question', 'en')
+    await prismaSupport.supportTicket.update({
+      where: { id: ticket.id },
+      data: { tgChatId: -1002000000001n, tgTopicId: 778 },
+    })
+    const { suggestion } = await requestZhoraSuggestion({
+      ticketId: ticket.id,
+      eventKey: 'reply:cmd:-100:126',
+    })
+    const longAnswer = `${'Answer '.repeat(400)}\n${'Detail '.repeat(200)}`
+    await prismaSupport.zhoraJob.update({
+      where: { id: suggestion.jobId },
+      data: {
+        status: 'completed',
+        result: {
+          answer: longAnswer,
+          answerRu: 'Русский ответ',
+          sourceKbIds: [],
+          needsReview: true,
+          sources: [],
+        },
+      },
+    })
+    vi.mocked(sendPlainMessage)
+      .mockResolvedValueOnce(12345)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(12346)
+    await runZhoraSuggestionPreviewPass()
+    expect(vi.mocked(sendPlainMessage)).toHaveBeenCalledTimes(2)
+    expect(
+      (
+        await prismaSupport.zhoraSuggestion.findUniqueOrThrow({
+          where: { id: suggestion.id },
+        })
+      ).nextChunkIndex
+    ).toBe(1)
+    await prismaSupport.zhoraSuggestion.update({
+      where: { id: suggestion.id },
+      data: { previewSendingUntil: new Date(0) },
+    })
+    await runZhoraSuggestionPreviewPass()
+    expect(vi.mocked(sendPlainMessage)).toHaveBeenCalledTimes(3)
+    expect(vi.mocked(sendPlainMessage).mock.calls[2]![0].text).toContain(
+      'Источник: ⚠ в базе нет ответа'
+    )
+    expect(
+      (
+        await prismaSupport.zhoraSuggestion.findUniqueOrThrow({
+          where: { id: suggestion.id },
+        })
+      ).previewTgMessageId
+    ).toBe(12346)
+    expect(
+      await prismaSupport.supportMessage.count({
+        where: { ticketId: ticket.id, direction: 'OUT' },
+      })
+    ).toBe(0)
   })
 
   it('does not use a previous language while a newer message is pending', async () => {

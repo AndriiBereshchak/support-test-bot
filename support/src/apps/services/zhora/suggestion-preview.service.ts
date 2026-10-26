@@ -1,0 +1,122 @@
+import { prismaSupport } from '@config/database'
+import { logger } from '@config/logger'
+import { sendPlainMessage } from '@telegram/api'
+import { splitText } from '@telegram/text'
+
+const SEND_LEASE_MS = 60_000
+const BATCH_SIZE = 10
+
+function previewText(result: unknown): string {
+  if (!result || typeof result !== 'object')
+    throw new Error('invalid_suggestion_result')
+  const value = result as Record<string, unknown>
+  if (
+    typeof value.answer !== 'string' ||
+    typeof value.answerRu !== 'string' ||
+    typeof value.needsReview !== 'boolean' ||
+    !Array.isArray(value.sources)
+  )
+    throw new Error('invalid_suggestion_result')
+
+  const singleLine = (text: string) => text.replace(/\s+/g, ' ').trim()
+  const sources = value.sources.map((item) => {
+    if (!item || typeof item !== 'object')
+      throw new Error('invalid_suggestion_source')
+    const source = item as Record<string, unknown>
+    if (typeof source.question !== 'string')
+      throw new Error('invalid_suggestion_source')
+    const code =
+      typeof source.code === 'string' ? `${singleLine(source.code)} ` : ''
+    const question = singleLine(source.question)
+    return `KB ${code}«${question}»`
+  })
+  return [
+    'Жора — черновик ответа',
+    value.answer,
+    `RU: ${value.answerRu}`,
+    sources.length
+      ? `Источник: ${sources.join('; ')}`
+      : 'Источник: ⚠ в базе нет ответа',
+    ...(value.needsReview ? ['⚠ не уверен, проверь'] : []),
+  ].join('\n\n')
+}
+
+/** Send a completed draft only into its operator topic, never to the client. */
+export async function runZhoraSuggestionPreviewPass(): Promise<void> {
+  const now = new Date()
+  const pending = await prismaSupport.zhoraSuggestion.findMany({
+    where: {
+      previewSentAt: null,
+      OR: [{ previewSendingUntil: null }, { previewSendingUntil: { lt: now } }],
+      job: { status: { in: ['completed', 'failed', 'uncertain'] } },
+      targetMessage: {
+        ticket: { tgChatId: { not: null }, tgTopicId: { not: null } },
+      },
+    },
+    include: {
+      job: { select: { status: true, result: true } },
+      targetMessage: {
+        select: {
+          tgMessageId: true,
+          ticket: { select: { tgChatId: true, tgTopicId: true } },
+        },
+      },
+    },
+    orderBy: { createdAt: 'asc' },
+    take: BATCH_SIZE,
+  })
+
+  for (const row of pending) {
+    const claimed = await prismaSupport.zhoraSuggestion.updateMany({
+      where: {
+        id: row.id,
+        previewSentAt: null,
+        OR: [
+          { previewSendingUntil: null },
+          { previewSendingUntil: { lt: now } },
+        ],
+      },
+      data: {
+        previewSendingUntil: new Date(Date.now() + SEND_LEASE_MS),
+      },
+    })
+    if (!claimed.count) continue
+
+    let body = 'Не удалось подготовить черновик Жоры. Попробуйте ещё раз.'
+    if (row.job.status === 'completed') {
+      try {
+        body = previewText(row.job.result)
+      } catch {
+        logger.warn('[zhora] completed suggestion has invalid result')
+      }
+    }
+    const chunks = splitText(body)
+    for (let index = row.nextChunkIndex; index < chunks.length; index++) {
+      let sentId: number | null = null
+      try {
+        // Each chunk is below Telegram's limit; persist it before the next.
+        sentId = await sendPlainMessage({
+          chatId: Number(row.targetMessage.ticket.tgChatId!),
+          topicId: row.targetMessage.ticket.tgTopicId!,
+          replyToMessageId: row.targetMessage.tgMessageId ?? undefined,
+          text: chunks[index]!,
+        })
+      } catch {
+        logger.warn('[zhora] suggestion preview delivery failed')
+      }
+      if (!sentId) break
+      const complete = index === chunks.length - 1
+      await prismaSupport.zhoraSuggestion.update({
+        where: { id: row.id },
+        data: {
+          nextChunkIndex: index + 1,
+          previewTgMessageId: sentId,
+          previewSentAt: complete ? new Date() : null,
+          previewSendingUntil: complete
+            ? null
+            : new Date(Date.now() + SEND_LEASE_MS),
+        },
+      })
+    }
+  }
+}

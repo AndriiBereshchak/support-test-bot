@@ -61,7 +61,7 @@ export const zhoraKbRoutes: FastifyPluginAsync = async (app) => {
 
   // multipart/form-data: one UTF-8 .json/.csv file and updatedById field.
   // JSON accepts a flat array or a document. The document may update links.
-  // File IDs are discarded; support generates its own UUIDs.
+  // File IDs are stored as codes; support generates its own UUIDs.
   // CSV uses the import fields; array/object/boolean cells contain JSON.
   app.post('/import', async (request, reply) => {
     const file = await request.file()
