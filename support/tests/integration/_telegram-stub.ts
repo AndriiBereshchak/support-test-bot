@@ -110,6 +110,8 @@ export interface TopicMessageInput {
    * whole reason `/del` checks ownership against our own rows.
    */
   replyToMessageId?: number
+  /** Override the author of the Telegram message being replied to. */
+  replyToFromId?: number
 }
 
 // `Update.NonChannel` is what every message-carrying update field is typed as:
@@ -152,7 +154,7 @@ function topicMessage(input: TopicMessageInput): Message & Update.NonChannel {
             is_topic_message: true,
             date: Math.floor(Date.now() / 1000),
             chat: SUPPORT_GROUP,
-            from: agentFrom(input.fromId),
+            from: agentFrom(input.replyToFromId ?? input.fromId),
             reply_to_message: undefined,
           },
         }

@@ -10,6 +10,7 @@ vi.mock('@config/env', async (importOriginal) => ({
   },
   ZHORA_OPENROUTER_API_KEY: 'synthetic-telegram-test-key',
   ZHORA_MODEL_REPLY: 'test/reply',
+  ZHORA_MODEL_FIX: 'test/fix',
   ZHORA_MODEL_TRANSLATE: 'test/translate',
 }))
 vi.mock('@apps/services/push.service', () => ({ pushToUser: vi.fn() }))
@@ -164,11 +165,9 @@ describe('Zhora Telegram preflight', () => {
     expect(sent().mock.calls[0]![0].text).toContain(
       'Не удалось определить язык этого сообщения'
     )
-    expect(
-      sent()
-        .mock.calls.slice(1)
-        .every(([message]) => message.text.includes('пока недоступна'))
-    ).toBe(true)
+    expect(sent().mock.calls[1]![0].text).toContain('язык')
+    expect(sent().mock.calls[2]![0].text).toContain('пока недоступна')
+    expect(sent().mock.calls[3]![0].text).toContain('язык')
     expect(
       await prismaSupport.supportMessage.count({
         where: { ticketId: ticket.id },
@@ -571,6 +570,202 @@ describe('Zhora card quick action', () => {
     expect(vi.mocked(telegram.sendToTopic)).not.toHaveBeenCalled()
     expect(sent()).toHaveBeenCalledTimes(2)
     expect(await outgoing()).toHaveLength(0)
+  })
+})
+
+describe('Zhora /fix command', () => {
+  it('keeps inline text private and deduplicates a redelivered command', async () => {
+    await prismaSupport.supportTicket.update({
+      where: { id: ticket.id },
+      data: { detectedLang: 'en', detectedLangSeq: target.seq },
+    })
+    const update = agentMessageUpdate({
+      topicId: ticket.tgTopicId!,
+      messageId: randomInt(1000, 2_000_000_000),
+      fromId,
+      text: '/fix пожалуйста проверьте аккаунт',
+    })
+    await handleUpdate(update)
+    await handleUpdate(update)
+    const jobs = await prismaSupport.zhoraJob.findMany({
+      where: { ticketId: ticket.id, operation: 'fix' },
+      include: { suggestion: true },
+    })
+    expect(jobs).toHaveLength(1)
+    expect(jobs[0]!.input).toEqual({
+      kind: 'suggestion-fix',
+      text: 'пожалуйста проверьте аккаунт',
+    })
+    expect(jobs[0]!.suggestion).toMatchObject({
+      targetMessageId: target.id,
+      language: 'en',
+    })
+    expect(await outgoing()).toHaveLength(0)
+    expect(pushToUser).not.toHaveBeenCalled()
+  })
+
+  it('uses an own sent message for /fix, warns in the preview, and sends a separate answer only after a tap', async () => {
+    await prismaSupport.supportTicket.update({
+      where: { id: ticket.id },
+      data: {
+        detectedLang: 'en',
+        detectedLangSeq: target.seq,
+        lastSeq: target.seq,
+      },
+    })
+    const sourceId = randomInt(1000, 2_000_000_000)
+    await handleUpdate(
+      agentMessageUpdate({
+        topicId: ticket.tgTopicId!,
+        messageId: sourceId,
+        fromId,
+        text: 'сейчас проверим',
+      })
+    )
+    expect(await outgoing()).toHaveLength(1)
+    expect(pushToUser).toHaveBeenCalledTimes(1)
+    const original = (await outgoing())[0]!
+    const fix = agentMessageUpdate({
+      topicId: ticket.tgTopicId!,
+      messageId: sourceId + 1,
+      fromId,
+      text: '/fix',
+      replyToMessageId: sourceId,
+    })
+    await handleUpdate(fix)
+    await handleUpdate(fix)
+    const job = await prismaSupport.zhoraJob.findFirstOrThrow({
+      where: { ticketId: ticket.id, operation: 'fix' },
+      include: { suggestion: true },
+    })
+    expect(job.input).toEqual({
+      kind: 'suggestion-fix',
+      text: 'сейчас проверим',
+      sourceMessageId: original.id,
+    })
+    expect(await outgoing()).toHaveLength(1)
+    await prismaSupport.zhoraJob.update({
+      where: { id: job.id },
+      data: {
+        status: 'completed',
+        result: {
+          answer: 'We will check.',
+          answerRu: 'Сейчас проверим.',
+          needsReview: false,
+          sources: [],
+          kind: 'fix',
+          originalAlreadySent: true,
+        },
+      },
+    })
+    await runZhoraSuggestionPreviewPass()
+    expect(sent().mock.calls.at(-1)![0].text).toContain(
+      'Исходное сообщение уже доставлено клиенту'
+    )
+    const suggestion = await prismaSupport.zhoraSuggestion.findUniqueOrThrow({
+      where: { id: job.suggestion!.id },
+    })
+    await handleZhoraSendCallback({
+      ...invocation(),
+      suggestionId: suggestion.id,
+      previewMessageId: suggestion.previewTgMessageId!,
+    })
+    await handleZhoraSendCallback({
+      ...invocation(),
+      suggestionId: suggestion.id,
+      previewMessageId: suggestion.previewTgMessageId!,
+    })
+    expect(await outgoing()).toMatchObject([
+      { id: original.id, text: 'сейчас проверим' },
+      { text: 'We will check.' },
+    ])
+    expect(pushToUser).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects /fix replying to another operator’s message', async () => {
+    await prismaSupport.supportTicket.update({
+      where: { id: ticket.id },
+      data: {
+        detectedLang: 'en',
+        detectedLangSeq: target.seq,
+        lastSeq: target.seq,
+      },
+    })
+    const sourceId = randomInt(1000, 2_000_000_000)
+    await handleUpdate(
+      agentMessageUpdate({
+        topicId: ticket.tgTopicId!,
+        messageId: sourceId,
+        fromId: fromId + 1,
+        text: 'чужой ответ',
+      })
+    )
+    await handleUpdate(
+      agentMessageUpdate({
+        topicId: ticket.tgTopicId!,
+        messageId: randomInt(1000, 2_000_000_000),
+        fromId,
+        text: '/fix',
+        replyToMessageId: sourceId,
+        replyToFromId: fromId + 1,
+      })
+    )
+    expect(
+      await prismaSupport.zhoraJob.count({
+        where: { ticketId: ticket.id, operation: 'fix' },
+      })
+    ).toBe(0)
+    expect(await outgoing()).toHaveLength(1)
+  })
+
+  it('delivers the edited draft only after the operator taps Send', async () => {
+    await prismaSupport.supportTicket.update({
+      where: { id: ticket.id },
+      data: {
+        detectedLang: 'en',
+        detectedLangSeq: target.seq,
+        lastSeq: target.seq,
+      },
+    })
+    await handleUpdate(
+      agentMessageUpdate({
+        topicId: ticket.tgTopicId!,
+        messageId: randomInt(1000, 2_000_000_000),
+        fromId,
+        text: '/fix проверим запрос',
+      })
+    )
+    const job = await prismaSupport.zhoraJob.findFirstOrThrow({
+      where: { ticketId: ticket.id, operation: 'fix' },
+      include: { suggestion: true },
+    })
+    await prismaSupport.zhoraJob.update({
+      where: { id: job.id },
+      data: {
+        status: 'completed',
+        result: {
+          answer: 'We will check your request.',
+          answerRu: 'Проверим ваш запрос.',
+          needsReview: false,
+          sources: [],
+          kind: 'fix',
+        },
+      },
+    })
+    await runZhoraSuggestionPreviewPass()
+    const suggestion = await prismaSupport.zhoraSuggestion.findUniqueOrThrow({
+      where: { id: job.suggestion!.id },
+    })
+    expect(await outgoing()).toHaveLength(0)
+    await handleZhoraSendCallback({
+      ...invocation(),
+      suggestionId: suggestion.id,
+      previewMessageId: suggestion.previewTgMessageId!,
+    })
+    expect(await outgoing()).toMatchObject([
+      { text: 'We will check your request.' },
+    ])
+    expect(pushToUser).toHaveBeenCalledTimes(1)
   })
 })
 

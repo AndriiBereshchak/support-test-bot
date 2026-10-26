@@ -62,12 +62,21 @@ function previewText(
       ? `Жора — перевод (${options.language})`
       : options.alternative
         ? 'Жора — ещё вариант ответа'
-        : 'Жора — черновик ответа',
+        : value.kind === 'fix'
+          ? 'Жора — исправленный черновик'
+          : 'Жора — черновик ответа',
     value.answer,
     `RU: ${value.answerRu}`,
-    sources.length
-      ? `Источник: ${sources.join('; ')}`
-      : 'Источник: ⚠ в базе нет ответа',
+    value.kind === 'fix'
+      ? 'Основа: текст оператора'
+      : sources.length
+        ? `Источник: ${sources.join('; ')}`
+        : 'Источник: ⚠ в базе нет ответа',
+    ...(value.originalAlreadySent === true
+      ? [
+          'Исходное сообщение уже доставлено клиенту. «Отправить» добавит исправленный текст новым сообщением.',
+        ]
+      : []),
     ...(value.needsReview ? ['⚠ не уверен, проверь'] : []),
   ].join('\n\n')
 }

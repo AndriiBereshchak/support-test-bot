@@ -1,4 +1,4 @@
-import { Prisma, type ZhoraJob } from '@prisma-support'
+import { Prisma, type SupportTicket, type ZhoraJob } from '@prisma-support'
 import { prismaSupport } from '@config/database'
 import { ApiError } from '@core/errors/api-error'
 import { assertZhoraTicketAvailable } from './access.service'
@@ -7,37 +7,18 @@ import { generateZhoraTextWithJournal } from './llm.service'
 import { getZhoraModel } from './openrouter'
 import { buildZhoraReplyPrompt, parseZhoraReply } from './prompt.service'
 
-export async function requestZhoraSuggestion(args: {
-  eventKey: string
-  ticketId: string
+/** The same customer anchor and language gate for reply and /fix drafts. */
+export async function resolveZhoraSuggestionTarget(
+  ticket: SupportTicket,
   messageId?: string
-  agentId?: string | null
-}) {
-  if (!args.eventKey || args.eventKey.length > 160)
-    throw new ApiError('Invalid Zhora event', 400)
-
-  // Reading before any context/embedding call also avoids paying twice for a
-  // redelivered command or callback. The unique job key handles racing copies.
-  const existing = await prismaSupport.zhoraJob.findUnique({
-    where: { eventKey: args.eventKey },
-    include: { suggestion: true },
-  })
-  if (existing?.suggestion)
-    return { suggestion: existing.suggestion, created: false }
-
-  const ticket = await prismaSupport.supportTicket.findUnique({
-    where: { id: args.ticketId },
-  })
-  if (!ticket) throw new ApiError('Ticket not found', 404)
-  await assertZhoraTicketAvailable(ticket)
-
+) {
   const target = await prismaSupport.supportMessage.findFirst({
     where: {
       ticketId: ticket.id,
       direction: 'IN',
       deletedAt: null,
       autoKind: null,
-      ...(args.messageId ? { id: args.messageId } : {}),
+      ...(messageId ? { id: messageId } : {}),
     },
     orderBy: { seq: 'desc' },
     select: {
@@ -68,6 +49,37 @@ export async function requestZhoraSuggestion(args: {
   if (!language || language === 'und') {
     throw new ApiError('Язык клиента пока не определён.', 409)
   }
+  return { target, language }
+}
+
+export async function requestZhoraSuggestion(args: {
+  eventKey: string
+  ticketId: string
+  messageId?: string
+  agentId?: string | null
+}) {
+  if (!args.eventKey || args.eventKey.length > 160)
+    throw new ApiError('Invalid Zhora event', 400)
+
+  // Reading before any context/embedding call also avoids paying twice for a
+  // redelivered command or callback. The unique job key handles racing copies.
+  const existing = await prismaSupport.zhoraJob.findUnique({
+    where: { eventKey: args.eventKey },
+    include: { suggestion: true },
+  })
+  if (existing?.suggestion)
+    return { suggestion: existing.suggestion, created: false }
+
+  const ticket = await prismaSupport.supportTicket.findUnique({
+    where: { id: args.ticketId },
+  })
+  if (!ticket) throw new ApiError('Ticket not found', 404)
+  await assertZhoraTicketAvailable(ticket)
+
+  const { target, language } = await resolveZhoraSuggestionTarget(
+    ticket,
+    args.messageId
+  )
 
   getZhoraModel({
     operation: 'reply',

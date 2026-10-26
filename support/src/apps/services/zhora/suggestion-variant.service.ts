@@ -41,6 +41,8 @@ export type SavedSuggestionResult = {
   answerRu: string
   sources: Array<{ code?: string | null; question: string }>
   needsReview: boolean
+  kind?: 'fix'
+  originalAlreadySent?: boolean
 }
 
 export function readSavedSuggestionResult(
@@ -55,6 +57,9 @@ export function readSavedSuggestionResult(
     typeof data.answerRu !== 'string' ||
     !data.answerRu.trim() ||
     typeof data.needsReview !== 'boolean' ||
+    (data.kind !== undefined && data.kind !== 'fix') ||
+    (data.originalAlreadySent !== undefined &&
+      typeof data.originalAlreadySent !== 'boolean') ||
     !Array.isArray(data.sources) ||
     data.sources.some(
       (item) =>

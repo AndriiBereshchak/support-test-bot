@@ -2,7 +2,7 @@ import { InlineKeyboard } from 'grammy'
 import type { SupportTicket } from '@prisma-support'
 import type { Message } from 'grammy/types'
 
-import { prismaExchange } from '@config/database'
+import { prismaExchange, prismaSupport } from '@config/database'
 import { logger } from '@config/logger'
 
 import {
@@ -53,6 +53,7 @@ import { DURATION_HINT, parseDuration } from '@core/duration'
 import { ApiError } from '@core/errors/api-error'
 import { prepareZhoraInvocation } from './zhora'
 import { requestZhoraSuggestion } from '@apps/services/zhora/suggestion.service'
+import { requestZhoraFix } from '@apps/services/zhora/suggestion-fix.service'
 
 import {
   deleteTopicMessage,
@@ -94,6 +95,8 @@ const HELP_TEXT = [
   '/unmute — снять запрет досрочно',
   '/close — закрыть тикет; работает внутри темы тикета',
   '/del — ответом на сообщение: убрать его и здесь, и у пользователя',
+  '/fix <текст> — подготовить исправленный ответ без отправки клиенту',
+  '/fix — ответом на своё сообщение: подготовить исправленный вариант',
   '/me — моя карточка оператора',
   '/setname <имя> — имя, которое видит пользователь',
   '/settitle <текст> — подпись под именем; без текста — убрать',
@@ -218,6 +221,65 @@ export async function handleZhoraReplyCallback(args: {
   })
 }
 
+async function commandFix(ctx: CommandContext, args: string): Promise<void> {
+  const invocation = await prepareZhoraInvocation({
+    chatId: ctx.chatId,
+    topicId: ctx.topicId,
+    fromId: ctx.fromId,
+    isBot: ctx.message.from?.is_bot,
+  })
+  if (!invocation) return
+
+  let text = args.trim()
+  let sourceMessageId: string | undefined
+  if (!text) {
+    const source = ctx.message.reply_to_message
+    if (!source) {
+      await reply(
+        ctx,
+        'Напишите /fix <текст> или ответьте /fix на своё сообщение в теме тикета.'
+      )
+      return
+    }
+    if (source.from?.id !== ctx.fromId || source.chat.id !== ctx.chatId) {
+      await reply(ctx, 'Для /fix выберите своё сообщение в этой теме.')
+      return
+    }
+    const original = await prismaSupport.supportMessage.findFirst({
+      where: {
+        ticketId: invocation.ticket.id,
+        tgMessageId: source.message_id,
+        direction: 'OUT',
+        deletedAt: null,
+        autoKind: null,
+      },
+      select: { id: true, text: true },
+    })
+    if (!original?.text?.trim()) {
+      await reply(ctx, 'Сообщение не найдено в текущем тикете.')
+      return
+    }
+    text = original.text
+    sourceMessageId = original.id
+  }
+  try {
+    await requestZhoraFix({
+      eventKey: `fix:cmd:${ctx.chatId}:${ctx.message.message_id}`,
+      ticketId: invocation.ticket.id,
+      agentId: invocation.agentId,
+      text,
+      ...(sourceMessageId ? { sourceMessageId } : {}),
+    })
+  } catch (error) {
+    await reply(
+      ctx,
+      error instanceof ApiError
+        ? error.message
+        : 'Не удалось запустить /fix. Попробуйте позже.'
+    )
+  }
+}
+
 /**
  * Run a command. Any command shape is consumed here — an unknown one gets the
  * help text rather than being relayed, because Telegram rendered it as a
@@ -238,17 +300,16 @@ export async function handleCommand(
       })
     }
     case 'fix':
+      return commandFix(ctx, command.args)
     case 'brief': {
       const invocation = await prepareZhoraInvocation({
         chatId: ctx.chatId,
         topicId: ctx.topicId,
         fromId: ctx.fromId,
         isBot: ctx.message.from?.is_bot,
-        // /fix has its own draft-reply flow; do not require its source to be IN.
       })
       if (!invocation) return
-      // Generation/fix/brief handlers are added in their own implementation
-      // blocks. Keep the commands consumed and private in the meantime.
+      // /brief has its own later implementation block.
       return reply(ctx, 'Эта команда Жоры пока недоступна.')
     }
     case 'help':

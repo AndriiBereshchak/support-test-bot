@@ -31,6 +31,7 @@ vi.mock('@config/env', async (importOriginal) => ({
   ZHORA_ENABLED: true,
   ZHORA_OPENROUTER_API_KEY: 'synthetic-suggestion-test-key',
   ZHORA_MODEL_REPLY: 'test/reply',
+  ZHORA_MODEL_FIX: 'test/fix',
   ZHORA_MODEL_TRANSLATE: 'test/translate',
 }))
 vi.mock('@apps/services/zhora/context.service', () => ({
@@ -57,6 +58,7 @@ import {
 import { generateZhoraTextWithJournal } from '@apps/services/zhora/llm.service'
 import { runZhoraJobPass } from '@apps/services/zhora/job.service'
 import { requestZhoraSuggestion } from '@apps/services/zhora/suggestion.service'
+import { requestZhoraFix } from '@apps/services/zhora/suggestion-fix.service'
 import { requestZhoraSuggestionAlternative } from '@apps/services/zhora/suggestion-alternative.service'
 import { requestZhoraSuggestionVariant } from '@apps/services/zhora/suggestion-variant.service'
 import { runZhoraSuggestionPreviewPass } from '@apps/services/zhora/suggestion-preview.service'
@@ -502,6 +504,163 @@ describe('Zhora answer requests', () => {
     const ready = await requestZhoraSuggestion(args)
     expect(ready.suggestion.language).toBe('pl')
     expect(ready.suggestion.targetMessageId).toBe(message.id)
+  })
+})
+
+describe('Zhora /fix drafts', () => {
+  it('deduplicates a typed draft, previews the edited text and never sends it to the customer', async () => {
+    const { ticket, message } = await customerMessage('Please help', 'en')
+    await prismaSupport.supportTicket.update({
+      where: { id: ticket.id },
+      data: { tgChatId: -1002000000001n, tgTopicId: 789 },
+    })
+    vi.mocked(generateZhoraTextWithJournal).mockResolvedValue({
+      text: JSON.stringify({
+        answer: 'Please send your account ID.',
+        answerRu: 'Пожалуйста, укажите ID аккаунта.',
+        needsReview: false,
+      }),
+      model: 'test/fix',
+      generationId: null,
+      durationMs: 1,
+      usage: {
+        inputTokens: 1,
+        outputTokens: 1,
+        costUsd: 0,
+        cachedTokens: null,
+        cacheWriteTokens: null,
+      },
+    })
+    const args = {
+      eventKey: `fix:cmd:${randomUUID()}`,
+      ticketId: ticket.id,
+      agentId: null,
+      text: 'дайте id аккаунта пожалуйста',
+    }
+    const first = await requestZhoraFix(args)
+    const repeated = await requestZhoraFix(args)
+    expect(repeated.suggestion.id).toBe(first.suggestion.id)
+    expect(first.suggestion.targetMessageId).toBe(message.id)
+    expect(first.suggestion.language).toBe('en')
+    await runZhoraJobPass()
+    const job = await prismaSupport.zhoraJob.findUniqueOrThrow({
+      where: { id: first.suggestion.jobId },
+    })
+    expect(job.status).toBe('completed')
+    expect(job.result).toMatchObject({
+      kind: 'fix',
+      answer: 'Please send your account ID.',
+      answerRu: 'Пожалуйста, укажите ID аккаунта.',
+    })
+    expect(
+      vi.mocked(generateZhoraTextWithJournal).mock.calls[0]![0]
+    ).toMatchObject({
+      operation: 'fix',
+      input: expect.stringContaining('дайте id аккаунта пожалуйста'),
+    })
+    expect(buildZhoraContext).not.toHaveBeenCalled()
+    await runZhoraSuggestionPreviewPass()
+    expect(vi.mocked(sendPlainMessage).mock.calls[0]![0]).toMatchObject({
+      text: expect.stringContaining('Жора — исправленный черновик'),
+      replyMarkup: {
+        inline_keyboard: expect.arrayContaining([
+          [{ text: 'Карточка', callback_data: `zc:${first.suggestion.id}` }],
+        ]),
+      },
+    })
+    expect(vi.mocked(sendPlainMessage).mock.calls[0]![0].text).not.toContain(
+      'в базе нет ответа'
+    )
+    expect(
+      await prismaSupport.supportMessage.count({
+        where: { ticketId: ticket.id, direction: 'OUT' },
+      })
+    ).toBe(0)
+  })
+
+  it('does not expose a send button for an invalid model result', async () => {
+    const { ticket } = await customerMessage('Question', 'en')
+    await prismaSupport.supportTicket.update({
+      where: { id: ticket.id },
+      data: { tgChatId: -1002000000001n, tgTopicId: 791 },
+    })
+    const { suggestion } = await requestZhoraFix({
+      eventKey: `fix:cmd:${randomUUID()}`,
+      ticketId: ticket.id,
+      agentId: null,
+      text: 'проверим',
+    })
+    vi.mocked(generateZhoraTextWithJournal).mockResolvedValue({
+      text: JSON.stringify({ answer: 'We will check.' }),
+      model: 'test/fix',
+      generationId: null,
+      durationMs: 1,
+      usage: {
+        inputTokens: 1,
+        outputTokens: 1,
+        costUsd: 0,
+        cachedTokens: null,
+        cacheWriteTokens: null,
+      },
+    })
+    await runZhoraJobPass()
+    expect(
+      (
+        await prismaSupport.zhoraJob.findUniqueOrThrow({
+          where: { id: suggestion.jobId },
+        })
+      ).status
+    ).toBe('failed')
+    await runZhoraSuggestionPreviewPass()
+    expect(
+      vi.mocked(sendPlainMessage).mock.calls[0]![0].replyMarkup
+    ).toBeUndefined()
+  })
+
+  it('carries the already-sent warning from a replied message into the preview', async () => {
+    const { ticket } = await customerMessage('Please help', 'en')
+    await prismaSupport.supportTicket.update({
+      where: { id: ticket.id },
+      data: { tgChatId: -1002000000001n, tgTopicId: 792 },
+    })
+    const { message: source } = await appendMessage({
+      ticketId: ticket.id,
+      direction: 'OUT',
+      text: 'щас проверим',
+    })
+    vi.mocked(generateZhoraTextWithJournal).mockResolvedValue({
+      text: JSON.stringify({
+        answer: 'We will check.',
+        answerRu: 'Сейчас проверим.',
+        needsReview: false,
+      }),
+      model: 'test/fix',
+      generationId: null,
+      durationMs: 1,
+      usage: {
+        inputTokens: 1,
+        outputTokens: 1,
+        costUsd: 0,
+        cachedTokens: null,
+        cacheWriteTokens: null,
+      },
+    })
+    const { suggestion } = await requestZhoraFix({
+      eventKey: `fix:reply:${randomUUID()}`,
+      ticketId: ticket.id,
+      agentId: null,
+      text: source.text!,
+      sourceMessageId: source.id,
+    })
+    await runZhoraJobPass()
+    const job = await prismaSupport.zhoraJob.findUniqueOrThrow({
+      where: { id: suggestion.jobId },
+    })
+    expect(job.result).toMatchObject({ originalAlreadySent: true })
+    await runZhoraSuggestionPreviewPass()
+    expect(vi.mocked(sendPlainMessage).mock.calls[0]![0].text).toContain(
+      'Исходное сообщение уже доставлено клиенту'
+    )
   })
 })
 
