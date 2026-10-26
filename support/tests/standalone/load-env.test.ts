@@ -103,6 +103,28 @@ describe('standard dev env settings', () => {
     expect(env.SUPPORT_BOT_TOKEN).toBe('test-token')
   })
 
+  it('allows local polling only with a test bot and no webhook URL', () => {
+    const local = dev({
+      SUPPORT_BOT_TOKEN: 'test-token',
+      SUPPORT_CHAT_ID: '-1001234567',
+      SUPPORT_WEBHOOK_SECRET: '',
+      SUPPORT_WEBHOOK_URL: '',
+      DEV_TELEGRAM_POLLING: 'true',
+    })
+    const env = developmentEnvironment(local)
+    expect(env.STANDALONE_TELEGRAM_POLLING).toBe('true')
+    expect(env.SUPPORT_WEBHOOK_URL).toBe('')
+    expect(() =>
+      developmentEnvironment({
+        ...local,
+        SUPPORT_WEBHOOK_URL: 'https://example.test/v1/internal/tg-webhook',
+      })
+    ).toThrow('empty SUPPORT_WEBHOOK_URL')
+    expect(() =>
+      developmentEnvironment({ ...local, SUPPORT_BOT_TOKEN: '' })
+    ).toThrow('test bot token')
+  })
+
   it('validates group ID and HTTPS for real Telegram', () => {
     expect(() =>
       developmentEnvironment(

@@ -95,6 +95,7 @@ export function testEnvironment(overrides) {
       throw new Error(`${key} must be empty for automated tests`)
     local[key] = ''
   }
+  local.DEV_TELEGRAM_POLLING = 'false'
   if (local.ZHORA_ENABLED !== 'false')
     throw new Error('ZHORA_ENABLED must be false for automated tests')
   return { ...process.env, ...local, SUPPORT_FILES_DIR: files }
@@ -114,11 +115,25 @@ export function developmentEnvironment(overrides) {
   const internal = required(local, 'SUPPORT_INTERNAL_TOKEN')
   const botToken = (local.SUPPORT_BOT_TOKEN ?? '').trim()
   const realTelegram = Boolean(botToken)
+  const polling = (local.DEV_TELEGRAM_POLLING ?? 'false').trim()
+  if (polling !== 'true' && polling !== 'false')
+    throw new Error('DEV_TELEGRAM_POLLING must be true or false')
+  if (polling === 'true') {
+    if (local.NODE_ENV !== 'development' || !realTelegram)
+      throw new Error(
+        'Local Telegram polling requires development mode and a test bot token'
+      )
+    if (local.SUPPORT_WEBHOOK_URL?.trim())
+      throw new Error(
+        'Local Telegram polling requires an empty SUPPORT_WEBHOOK_URL'
+      )
+  }
   if (realTelegram) {
     const chat = Number(required(local, 'SUPPORT_CHAT_ID'))
     if (!Number.isSafeInteger(chat) || chat >= 0)
       throw new Error('SUPPORT_CHAT_ID must be a negative Telegram group ID')
     if (
+      polling !== 'true' &&
       !/^[A-Za-z0-9_-]{1,256}$/.test(required(local, 'SUPPORT_WEBHOOK_SECRET'))
     )
       throw new Error(
@@ -146,6 +161,7 @@ export function developmentEnvironment(overrides) {
       ? (local.SUPPORT_WEBHOOK_URL ?? '').trim()
       : '',
     STANDALONE_REAL_TELEGRAM: String(realTelegram),
+    STANDALONE_TELEGRAM_POLLING: polling,
     STANDALONE_WORKER_ENABLED: String(local.SUPPORT_ROLE !== 'api'),
   }
 }
