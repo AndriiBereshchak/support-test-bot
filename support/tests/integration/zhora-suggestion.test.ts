@@ -301,6 +301,71 @@ describe('Zhora answer requests', () => {
     expect(await prismaSupport.zhoraJob.count()).toBe(2)
   })
 
+  it('makes an unanswered successful KB search available for candidate grouping', async () => {
+    const { ticket, message } = await customerMessage(
+      'Where is my transfer?',
+      'en'
+    )
+    const embedding = [1, ...Array(1023).fill(0)]
+    vi.mocked(buildZhoraContext).mockResolvedValue({
+      ticket,
+      targetMessage: {
+        id: message.id,
+        seq: message.seq,
+        author: 'customer',
+        agentId: null,
+        agentName: null,
+        text: message.text,
+        attachments: [],
+        createdAt: message.createdAt,
+      },
+      history: [],
+      searchQuery: message.text ?? '',
+      userCard: null,
+      deposits: [],
+      withdrawals: [],
+      knowledge: [],
+      candidateEmbedding: embedding,
+      candidateEmbeddingModel: 'test/embedding',
+      kbSearchComplete: true,
+      kbConfig: null,
+      unavailable: [],
+    } as ZhoraContext)
+    vi.mocked(generateZhoraTextWithJournal).mockResolvedValue({
+      text: JSON.stringify({
+        answer: 'Please give us your transfer ID.',
+        answerRu: 'Укажите ID перевода.',
+        sourceKbIds: [],
+        needsReview: true,
+      }),
+      model: 'test/reply',
+      generationId: null,
+      durationMs: 1,
+      usage: {
+        inputTokens: 1,
+        outputTokens: 1,
+        costUsd: 0,
+        cachedTokens: null,
+        cacheWriteTokens: null,
+      },
+    })
+    await requestZhoraSuggestion({
+      eventKey: `candidate-source:${message.id}`,
+      ticketId: ticket.id,
+      messageId: message.id,
+    })
+    await runZhoraJobPass()
+    const job = await prismaSupport.zhoraJob.findUniqueOrThrow({
+      where: { eventKey: `candidate-source:${message.id}` },
+    })
+    expect(job.status).toBe('completed')
+    expect(job.result).toMatchObject({
+      sourceKbIds: [],
+      candidateEmbedding: embedding,
+      candidateEmbeddingModel: 'test/embedding',
+    })
+  })
+
   it('resumes a long preview after partial delivery', async () => {
     const { ticket } = await customerMessage('Question', 'en')
     await prismaSupport.supportTicket.update({

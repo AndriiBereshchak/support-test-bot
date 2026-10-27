@@ -104,6 +104,9 @@ const context = (): ZhoraContext => {
       },
     ],
     kbConfig: null,
+    candidateEmbedding: null,
+    candidateEmbeddingModel: null,
+    kbSearchComplete: true,
     unavailable: [],
   }
 }

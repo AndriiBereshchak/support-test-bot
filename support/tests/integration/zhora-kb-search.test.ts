@@ -59,6 +59,7 @@ import {
   enqueuePendingKbEmbeddings,
   findZhoraKbMatches,
   searchZhoraKb,
+  searchZhoraKbForSuggestion,
 } from '@apps/services/zhora/kb-search.service'
 import {
   runZhoraJobPass,
@@ -409,6 +410,33 @@ describe('Zhora KB indexing and pgvector search', () => {
     } finally {
       await prismaSupport.supportTicket.delete({ where: { id: ticket.id } })
     }
+  })
+
+  it('provides one reusable query vector for a suggestion even when KB is empty', async () => {
+    const result = await searchZhoraKbForSuggestion({
+      question: 'Synthetic unanswered question',
+      minScore: -1,
+    })
+    expect(result).toMatchObject({
+      matches: [],
+      embedding: vector(),
+      embeddingModel: flags.model,
+      complete: true,
+    })
+    expect(generate).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not treat an unindexed active KB entry as a confirmed gap', async () => {
+    await prismaSupport.zhoraKbEntry.create({
+      data: { ...input(), translations: {}, updatedById: 'test-user-1' },
+    })
+    const result = await searchZhoraKbForSuggestion({
+      question: 'Synthetic unanswered question',
+      minScore: -1,
+    })
+    expect(result.matches).toEqual([])
+    expect(result.complete).toBe(false)
+    expect(generate).toHaveBeenCalledTimes(1)
   })
 
   it('rolls back creates, activation, content edits and imports when enqueueing fails', async () => {

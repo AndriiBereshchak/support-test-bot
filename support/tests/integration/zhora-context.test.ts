@@ -2,7 +2,10 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupportTicket } from '@prisma-support'
 
-const settings = vi.hoisted(() => ({ historyLimit: 20 }))
+const settings = vi.hoisted(() => ({
+  historyLimit: 20,
+  embedding: [1, ...Array(1023).fill(0)],
+}))
 vi.mock('@config/env', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@config/env')>()),
   get ZHORA_CONTEXT_MESSAGE_LIMIT() {
@@ -12,7 +15,12 @@ vi.mock('@config/env', async (importOriginal) => ({
 // No paid calls: only the retrieval boundary is replaced. Ticket/history,
 // card and payment reads use the real local test database.
 vi.mock('@apps/services/zhora/kb-search.service', () => ({
-  searchZhoraKb: vi.fn(async () => []),
+  searchZhoraKbForSuggestion: vi.fn(async () => ({
+    matches: [],
+    embedding: settings.embedding,
+    embeddingModel: 'test/embedding',
+    complete: true,
+  })),
 }))
 vi.mock('@apps/services/withdrawal-list.service', async (importOriginal) => {
   const actual =
@@ -24,14 +32,14 @@ vi.mock('@apps/services/withdrawal-list.service', async (importOriginal) => {
 
 import { prismaExchange, prismaSupport } from '@config/database'
 import { buildZhoraContext } from '@apps/services/zhora/context.service'
-import { searchZhoraKb } from '@apps/services/zhora/kb-search.service'
+import { searchZhoraKbForSuggestion } from '@apps/services/zhora/kb-search.service'
 import { getUserCard } from '@apps/services/user-card.service'
 import { listUserWithdrawals } from '@apps/services/withdrawal-list.service'
 import { cleanupTestUser, createTestUser, type TestUser } from './_helpers'
 
 let user: TestUser
 let ticket: SupportTicket
-const search = vi.mocked(searchZhoraKb)
+const search = vi.mocked(searchZhoraKbForSuggestion)
 // Prisma delegates are proxies: Vitest cannot always restore their dynamic
 // property descriptors, so preserve the two spied methods explicitly.
 const originalMuteRead = prismaSupport.supportMute.findUnique
@@ -44,7 +52,12 @@ const input = () => ({
 
 beforeEach(async () => {
   settings.historyLimit = 20
-  search.mockReset().mockResolvedValue([])
+  search.mockReset().mockResolvedValue({
+    matches: [],
+    embedding: settings.embedding,
+    embeddingModel: 'test/embedding',
+    complete: true,
+  })
   user = await createTestUser()
   ticket = await prismaSupport.supportTicket.create({
     data: { ...user, originDomain: 'binodex.io' },

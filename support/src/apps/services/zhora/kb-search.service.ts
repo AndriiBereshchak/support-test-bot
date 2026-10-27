@@ -189,16 +189,74 @@ export async function searchZhoraKb(
     agentId?: string | null
   }
 ): Promise<ZhoraKbMatch[]> {
+  return (await searchZhoraKbInternal(args, false)).matches
+}
+
+/** A suggestion reuses this query vector if its KB search finds no answer. */
+export async function searchZhoraKbForSuggestion(
+  args: KbSearchOptions & {
+    question: string
+    ticketId?: string | null
+    agentId?: string | null
+  }
+): Promise<{
+  matches: ZhoraKbMatch[]
+  embedding: number[]
+  embeddingModel: string | null
+  complete: boolean
+}> {
+  const result = await searchZhoraKbInternal(args, true)
+  if (!result.embedding) throw new OpenRouterError('invalid_input')
+  return { ...result, embedding: result.embedding }
+}
+
+async function searchZhoraKbInternal(
+  args: KbSearchOptions & {
+    question: string
+    ticketId?: string | null
+    agentId?: string | null
+  },
+  embedWithoutKb: boolean
+): Promise<{
+  matches: ZhoraKbMatch[]
+  embedding: number[] | null
+  embeddingModel: string | null
+  complete: boolean
+}> {
   validateSearch(args)
   getZhoraModel({ operation: 'embedding', input: args.question })
   const ready = await prismaSupport.$queryRaw<Array<{ id: string }>>`
     SELECT id FROM zhora_kb_entries WHERE ${eligibleEntries(args.originDomain)} LIMIT 1
   `
-  if (!ready.length) return []
+  if (!ready.length && !embedWithoutKb)
+    return {
+      matches: [],
+      embedding: null,
+      embeddingModel: null,
+      complete: true,
+    }
+  const domain = args.originDomain?.trim().toLowerCase() || null
+  const incomplete = embedWithoutKb
+    ? await prismaSupport.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM zhora_kb_entries
+        WHERE status = 'active'
+          AND (cardinality(domains) = 0 OR domains @> ARRAY[${domain}]::text[])
+          AND (embedding IS NULL OR embedding_model IS DISTINCT FROM ${ZHORA_MODEL_EMBEDDING}
+            OR embedding_hash IS DISTINCT FROM ${sourceHash})
+        LIMIT 1
+      `
+    : []
   // Qwen recommends a retrieval instruction on queries, not on documents.
   const result = await generateZhoraEmbeddingWithJournal(
     `Instruct: Retrieve support knowledge that answers the user question\nQuery: ${args.question}`,
     { ticketId: args.ticketId, agentId: args.agentId }
   )
-  return findZhoraKbMatches(result.embedding, args)
+  return {
+    matches: ready.length
+      ? await findZhoraKbMatches(result.embedding, args)
+      : [],
+    embedding: result.embedding,
+    embeddingModel: result.model,
+    complete: incomplete.length === 0,
+  }
 }

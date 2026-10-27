@@ -30,6 +30,10 @@ import { generateZhoraSuggestionVariant } from './suggestion-variant.service'
 import { runZhoraSuggestionPreviewPass } from './suggestion-preview.service'
 import { runZhoraTicketCategoryPass } from './ticket-category.service'
 import { finalizeIgnoredSuggestions } from './suggestion-outcome.service'
+import {
+  runZhoraCandidateDraftPass,
+  runZhoraCandidateGroupingPass,
+} from './kb-candidate.service'
 export { enqueueZhoraJob } from './job-enqueue.service'
 
 // Technical scheduling defaults, not product limits. One job at a time per
@@ -38,6 +42,7 @@ const POLL_INTERVAL_MS = 1000
 const LEASE_MS = 60_000
 const HEARTBEAT_MS = 15_000
 const KB_DISCOVERY_INTERVAL_MS = 15 * 60_000
+const CANDIDATE_PASS_INTERVAL_MS = 60_000
 
 function readInput(job: ZhoraJob): OpenRouterInput {
   const value = job.input
@@ -241,6 +246,7 @@ export function startZhoraWorker(): () => Promise<void> {
   let active: Promise<void> | undefined
   let nextKbDiscovery = 0
   let kbCursor: string | null = null
+  let nextCandidatePass = 0
   const tick = () => {
     if (stopping || active) return
     active = (async () => {
@@ -259,6 +265,11 @@ export function startZhoraWorker(): () => Promise<void> {
       if (!stopping) await runZhoraSuggestionPreviewPass()
       if (!stopping) await runZhoraBriefDeliveryPass()
       if (!stopping) await finalizeIgnoredSuggestions()
+      if (!stopping && Date.now() >= nextCandidatePass) {
+        nextCandidatePass = Date.now() + CANDIDATE_PASS_INTERVAL_MS
+        await runZhoraCandidateGroupingPass()
+        if (!stopping) await runZhoraCandidateDraftPass()
+      }
     })()
       .catch(() => {
         logger.warn('[zhora] job pass failed; no automatic generation retry')

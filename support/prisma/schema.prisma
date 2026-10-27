@@ -274,6 +274,7 @@ model SupportMessage {
   autoKind String? @map("auto_kind") @db.VarChar(32)
 
   text String?
+  kbCandidateOccurrence ZhoraKbCandidateOccurrence?
 
   // Author for OUT messages. Null for IN/SYSTEM, and null for an OUT message
   // whose Telegram sender has no SupportAgent row yet (renders as the generic
@@ -515,6 +516,7 @@ model ZhoraJob {
   briefSendingUntil DateTime? @map("brief_sending_until") @db.Timestamptz()
   translation    ZhoraTranslation?
   suggestion     ZhoraSuggestion?
+  kbCandidateDraft ZhoraKbCandidate?
 
   @@index([status, createdAt])
   @@index([status, leaseExpiresAt])
@@ -565,12 +567,14 @@ model ZhoraSuggestion {
   rating              Int?              @db.SmallInt
   ratedAt             DateTime?         @map("rated_at") @db.Timestamptz()
   ratedByTgUserId     BigInt?           @map("rated_by_tg_user_id")
+  candidateCheckedAt  DateTime?         @map("candidate_checked_at") @db.Timestamptz()
   createdAt           DateTime          @default(now()) @map("created_at") @db.Timestamptz()
 
   @@unique([sourceSuggestionId, language])
   @@index([targetMessageId, createdAt])
   @@index([previewSentAt, previewSendingUntil])
   @@index([outcome, previewSentAt])
+  @@index([candidateCheckedAt, createdAt])
   @@map("zhora_suggestions")
 }
 
@@ -605,6 +609,39 @@ model ZhoraKbEntry {
   embeddingIndexedAt DateTime?                    @map("embedding_indexed_at") @db.Timestamptz()
 
   @@map("zhora_kb_entries")
+}
+
+// One counted question per customer message, even after repeated /zhora taps.
+model ZhoraKbCandidateOccurrence {
+  messageId   String           @id @map("message_id") @db.Uuid
+  message     SupportMessage   @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  candidateId String           @map("candidate_id") @db.Uuid
+  candidate   ZhoraKbCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  suggestionId String          @map("suggestion_id") @db.Uuid
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@index([candidateId])
+  @@map("zhora_kb_candidate_occurrences")
+}
+
+// The representative vector is used only for grouping questions. Approval and
+// activation into the KB belong to the management application, not this model.
+model ZhoraKbCandidate {
+  id                    String                        @id @default(uuid()) @db.Uuid
+  question              String
+  originDomain          String?                       @map("origin_domain") @db.VarChar(255)
+  embedding             Unsupported("vector(1024)")?
+  embeddingModel        String                        @map("embedding_model") @db.VarChar(160)
+  draftAnswerRu         String?                       @map("draft_answer_ru")
+  draftSourceMessageIds String[]                      @default([]) @map("draft_source_message_ids") @db.Uuid
+  draftJobId            String?                       @unique @map("draft_job_id") @db.Uuid
+  draftJob              ZhoraJob?                     @relation(fields: [draftJobId], references: [id], onDelete: SetNull)
+  draftProcessedAt      DateTime?                     @map("draft_processed_at") @db.Timestamptz()
+  occurrences           ZhoraKbCandidateOccurrence[]
+  createdAt             DateTime                      @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt             DateTime                      @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@map("zhora_kb_candidates")
 }
 
 // Shared links used by placeholders in KB answers. The document header itself

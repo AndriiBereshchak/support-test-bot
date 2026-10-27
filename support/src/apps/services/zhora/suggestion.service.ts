@@ -147,6 +147,14 @@ export async function generateZhoraSuggestion(job: ZhoraJob) {
   const reply = parseZhoraReply(result.text, context)
   return {
     ...reply,
+    // Persist only when a successful, fully indexed KB search supplied no
+    // usable source. The worker groups this vector after the job completes.
+    ...(reply.sourceKbIds.length === 0 && context.kbSearchComplete
+      ? {
+          candidateEmbedding: context.candidateEmbedding,
+          candidateEmbeddingModel: context.candidateEmbeddingModel,
+        }
+      : {}),
     // The model cites UUIDs; snapshot human-readable source labels from the
     // exact KB context it saw. Later KB edits cannot change this preview.
     sources: reply.sourceKbIds.map((id) => {

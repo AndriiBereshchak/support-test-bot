@@ -12,6 +12,7 @@ import { healthRoutes } from '@apps/routes/health.routes'
 import { internalRoutes } from '@apps/routes/internal.routes'
 import { telegramRoutes } from '@apps/routes/telegram.routes'
 import { zhoraKbRoutes } from '@apps/routes/zhora-kb.routes'
+import { zhoraKbCandidateRoutes } from '@apps/routes/zhora-kb-candidate.routes'
 import { zhoraTemplateRoutes } from '@apps/routes/zhora-template.routes'
 
 /**
@@ -115,6 +116,9 @@ export function buildApp(): FastifyInstance {
   void app.register(telegramRoutes, { prefix: '/v1/internal' })
   void app.register(zhoraKbRoutes, {
     prefix: '/v1/internal/zhora/kb',
+  })
+  void app.register(zhoraKbCandidateRoutes, {
+    prefix: '/v1/internal/zhora/kb-candidates',
   })
   void app.register(zhoraTemplateRoutes, {
     prefix: '/v1/internal/zhora/templates',

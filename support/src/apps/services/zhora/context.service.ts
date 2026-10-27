@@ -7,7 +7,7 @@ import { listUserDeposits } from '../deposit-list.service'
 import { listUserWithdrawals } from '../withdrawal-list.service'
 import { getUserCard } from '../user-card.service'
 import { assertZhoraTicketAvailable } from './access.service'
-import { searchZhoraKb } from './kb-search.service'
+import { searchZhoraKbForSuggestion } from './kb-search.service'
 import { getZhoraKbConfig } from './kb-config.service'
 
 const SEARCH_MESSAGE_LIMIT = 5
@@ -140,7 +140,7 @@ export async function buildZhoraContext(input: ZhoraContextInput) {
       getUserCard(ticket.userId, { requireComplete: true }),
       listUserDeposits(ticket.userId),
       listUserWithdrawals(ticket.userId),
-      searchZhoraKb({
+      searchZhoraKbForSuggestion({
         question: searchQuery,
         originDomain: ticket.originDomain,
         ticketId: ticket.id,
@@ -162,15 +162,22 @@ export async function buildZhoraContext(input: ZhoraContextInput) {
     return null
   }
 
+  const userCard = available(card, 'userCard')
+  const depositsValue = available(deposits, 'deposits')
+  const withdrawalsValue = available(withdrawals, 'withdrawals')
+  const kbSearch = available(knowledge, 'knowledge')
   return {
     ticket,
     targetMessage,
     history: messages.slice(-ZHORA_CONTEXT_MESSAGE_LIMIT),
     searchQuery,
-    userCard: available(card, 'userCard'),
-    deposits: available(deposits, 'deposits'),
-    withdrawals: available(withdrawals, 'withdrawals'),
-    knowledge: available(knowledge, 'knowledge'),
+    userCard,
+    deposits: depositsValue,
+    withdrawals: withdrawalsValue,
+    knowledge: kbSearch?.matches ?? null,
+    candidateEmbedding: kbSearch?.embedding ?? null,
+    candidateEmbeddingModel: kbSearch?.embeddingModel ?? null,
+    kbSearchComplete: kbSearch?.complete ?? false,
     kbConfig: config.status === 'fulfilled' ? config.value : null,
     unavailable,
   }

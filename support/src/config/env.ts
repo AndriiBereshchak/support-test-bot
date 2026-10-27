@@ -297,6 +297,22 @@ export const ZHORA_MONTHLY_BUDGET_USD = zhoraNumberEnv(
   'ZHORA_MONTHLY_BUDGET_USD',
   300
 )
+export const ZHORA_CANDIDATE_MIN_REPETITIONS = zhoraNumberEnv(
+  'ZHORA_CANDIDATE_MIN_REPETITIONS',
+  3
+)
+if (!Number.isSafeInteger(ZHORA_CANDIDATE_MIN_REPETITIONS)) {
+  throw new Error(
+    '[support] ZHORA_CANDIDATE_MIN_REPETITIONS must be an integer'
+  )
+}
+export const ZHORA_CANDIDATE_SIMILARITY_THRESHOLD = zhoraNumberEnv(
+  'ZHORA_CANDIDATE_SIMILARITY_THRESHOLD',
+  0.9
+)
+if (ZHORA_CANDIDATE_SIMILARITY_THRESHOLD > 1) {
+  throw new Error('[support] ZHORA_CANDIDATE_SIMILARITY_THRESHOLD must be <= 1')
+}
 // Recent ticket messages used to prepare a reply, oldest first.
 export const ZHORA_CONTEXT_MESSAGE_LIMIT = zhoraNumberEnv(
   'ZHORA_CONTEXT_MESSAGE_LIMIT',
