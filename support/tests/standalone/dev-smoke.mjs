@@ -25,6 +25,11 @@ async function request(route, body) {
 
 assert.equal((await request('/healthz')).status, 'ok')
 assert.equal((await fetch(`${base}/__dev/fixtures`)).status, 401)
+assert.equal(
+  (await request('/__dev/events')).mode,
+  'offline',
+  'dev:smoke requires the running yarn dev server to be offline; restart yarn dev after clearing SUPPORT_BOT_TOKEN'
+)
 const { users } = await request('/__dev/fixtures')
 assert.equal(users.length, 3)
 const user = users[0]

@@ -1,5 +1,6 @@
 import { Prisma, type SupportTicket, type ZhoraJob } from '@prisma-support'
 import { prismaSupport } from '@config/database'
+import { ZHORA_KB_MIN_SCORE } from '@config/env'
 import { ApiError } from '@core/errors/api-error'
 import { assertZhoraTicketAvailable } from './access.service'
 import { buildZhoraContext } from './context.service'
@@ -134,9 +135,7 @@ export async function generateZhoraSuggestion(job: ZhoraJob) {
     product: ticket.product,
     messageId: suggestion.targetMessageId,
     agentId: job.agentId,
-    // No calibrated similarity threshold yet. Review source quality with the
-    // real KB before introducing a cutoff that could discard useful records.
-    minScore: -1,
+    minScore: ZHORA_KB_MIN_SCORE,
   })
   const input = buildZhoraReplyPrompt(context, suggestion.language)
   const result = await generateZhoraTextWithJournal(input, {

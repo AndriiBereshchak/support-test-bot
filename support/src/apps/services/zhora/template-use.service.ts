@@ -264,7 +264,7 @@ export async function updateTemplateDraft(args: {
         values,
         text,
         missing,
-        editedBeforeSend: true,
+        editedBeforeSend: draft.editedBeforeSend || args.operation.kind === 'edit',
         previewVersion: { increment: 1 },
         previewTgMessageId: null,
         previewSendingUntil: null,

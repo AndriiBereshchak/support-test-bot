@@ -98,6 +98,36 @@ afterEach(async () => {
 })
 
 describe('Zhora template Telegram flow', () => {
+  it('does not count filling a variable as editing before send', async () => {
+    const template = await createTemplate({
+      ru: 'Статус вывода: {withdrawal_status}.',
+      en: 'Withdrawal status: {withdrawal_status}.',
+    })
+    await handleUpdate(command(`/t ${template.code}`))
+    const draft = await prismaSupport.zhoraTemplateDraft.findFirstOrThrow({
+      where: { templateId: template.id, ticketId: ticket.id },
+    })
+    await handleUpdate(
+      command('/t withdrawal_status="under review"', draft.previewTgMessageId!)
+    )
+    const filled = await prismaSupport.zhoraTemplateDraft.findUniqueOrThrow({
+      where: { id: draft.id },
+    })
+    expect(filled.text).toBe('Withdrawal status: under review.')
+    expect(filled.editedBeforeSend).toBe(false)
+    await handleUpdate(
+      tap(
+        filled.previewTgMessageId!,
+        `${telegram.ZHORA_TEMPLATE_SEND_CALLBACK_PREFIX}${filled.id}:${filled.previewVersion}`
+      )
+    )
+    expect(
+      await prismaSupport.zhoraTemplateUsage.findUniqueOrThrow({
+        where: { draftId: filled.id },
+      })
+    ).toMatchObject({ editedBeforeSend: false, agentId })
+  })
+
   it('lists categories, fills a missing value privately, edits and sends once', async () => {
     const template = await createTemplate({
       ru: 'Здравствуйте, {name}. Статус вывода: {withdrawal_status}.',
@@ -138,6 +168,7 @@ describe('Zhora template Telegram flow', () => {
       where: { id: first.id },
     })
     expect(filled.text).toBe('Hello, Alice. Withdrawal status: under review.')
+    expect(filled.editedBeforeSend).toBe(false)
     expect(filled.previewVersion).toBe(2)
     expect(filled.previewTgMessageId).not.toBe(first.previewTgMessageId)
 
@@ -150,6 +181,7 @@ describe('Zhora template Telegram flow', () => {
     const edited = await prismaSupport.zhoraTemplateDraft.findUniqueOrThrow({
       where: { id: first.id },
     })
+    expect(edited.editedBeforeSend).toBe(true)
     expect(edited.previewVersion).toBe(3)
     await handleUpdate(
       tap(

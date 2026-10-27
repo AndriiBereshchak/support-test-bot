@@ -293,6 +293,20 @@ export const ZHORA_MODEL_CANDIDATES =
 export const ZHORA_MODEL_EMBEDDING =
   process.env.ZHORA_MODEL_EMBEDDING?.trim() ?? ''
 
+// Provisional cosine-similarity cutoff for KB retrieval. Calibrate against
+// representative questions from the indexed KB; -1 disables the cutoff.
+const zhoraKbMinScoreRaw = process.env.ZHORA_KB_MIN_SCORE?.trim()
+export const ZHORA_KB_MIN_SCORE = zhoraKbMinScoreRaw
+  ? Number(zhoraKbMinScoreRaw)
+  : 0.5
+if (
+  !Number.isFinite(ZHORA_KB_MIN_SCORE) ||
+  ZHORA_KB_MIN_SCORE < -1 ||
+  ZHORA_KB_MIN_SCORE > 1
+) {
+  throw new Error('[support] ZHORA_KB_MIN_SCORE must be between -1 and 1')
+}
+
 export const ZHORA_MONTHLY_BUDGET_USD = zhoraNumberEnv(
   'ZHORA_MONTHLY_BUDGET_USD',
   300
