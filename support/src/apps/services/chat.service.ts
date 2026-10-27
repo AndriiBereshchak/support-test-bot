@@ -29,6 +29,7 @@ import {
   ensureUserThread,
   findOpenTicket,
   findPendingFeedback,
+  findTicketByTopic,
   isThreadTopic,
   saveThreadBinding,
 } from './ticket.service'
@@ -176,7 +177,9 @@ async function createThreadTopic(
   // feature: every ticket the person opens lands in one thread, in order.
   if (thread.tgTopicId != null && thread.tgChatId != null) {
     await announceNewConversation(ticket, thread)
-    return thread
+    return prismaSupport.supportUserThread.findUniqueOrThrow({
+      where: { id: thread.id },
+    })
   }
 
   const card = await getUserCard(ticket.userId)
@@ -185,6 +188,7 @@ async function createThreadTopic(
     userNId: ticket.userNId,
     card,
     originDomain: ticket.originDomain,
+    category: ticket.category,
     threadTitle: true,
   })
   // Telegram disabled (no token) or refusing — leave the thread unbound and
@@ -226,42 +230,69 @@ async function announceNewConversation(
       text: '🆕 Новое обращение — всё, что ниже, относится к нему.',
     })
 
-    // Refresh the pinned card in place; a fresh one is posted if the edit is
-    // refused (an operator deleted it, or it predates the message id).
-    const card = await getUserCard(ticket.userId)
-    const edited =
-      thread.tgInfoMessageId != null &&
-      (await telegram.editTicketCard({
-        chatId,
-        topicId,
-        messageId: thread.tgInfoMessageId,
-        ticketId: ticket.id,
-        userNId: ticket.userNId,
-        card,
-        originDomain: ticket.originDomain,
-      }))
-    if (!edited) {
-      const posted = await telegram.postTicketCard({
-        chatId,
-        topicId,
-        ticketId: ticket.id,
-        userNId: ticket.userNId,
-        card,
-        originDomain: ticket.originDomain,
-      })
-      if (posted != null) {
-        await prismaSupport.supportUserThread.update({
-          where: { id: thread.id },
-          data: { tgInfoMessageId: posted },
-        })
-      }
-    }
+    await refreshPinnedTicketCard(ticket, thread)
   } catch (err) {
     logger.warn(
       `[chat] could not announce a new conversation in topic ${topicId}: ${
         (err as Error).message
       }`
     )
+  }
+}
+
+/** Refresh the active ticket's pinned card after a category change. */
+export async function refreshPinnedTicketCard(
+  ticket: SupportTicket,
+  knownThread?: SupportUserThread
+): Promise<void> {
+  const latest =
+    (await prismaSupport.supportTicket.findUnique({
+      where: { id: ticket.id },
+    })) ?? ticket
+  const thread =
+    knownThread ??
+    (await prismaSupport.supportUserThread.findUnique({
+      where: {
+        product_userId: { product: ticket.product, userId: ticket.userId },
+      },
+    }))
+  const chatId = Number(thread?.tgChatId ?? latest.tgChatId)
+  const topicId = thread?.tgTopicId ?? latest.tgTopicId
+  if (!chatId || topicId == null) return
+  if (!knownThread) {
+    const current = await findTicketByTopic(chatId, topicId)
+    if (current?.id !== latest.id) return
+  }
+  try {
+    const card = await getUserCard(latest.userId)
+    const messageId = thread?.tgInfoMessageId ?? latest.tgInfoMessageId
+    const args = {
+      chatId,
+      topicId,
+      ticketId: latest.id,
+      userNId: latest.userNId,
+      card,
+      originDomain: latest.originDomain,
+      category: latest.category,
+    }
+    const edited =
+      messageId != null &&
+      (await telegram.editTicketCard({ ...args, messageId }))
+    if (edited) return
+    const posted = await telegram.postTicketCard(args)
+    if (posted == null) return
+    if (thread) {
+      await prismaSupport.supportUserThread.update({
+        where: { id: thread.id },
+        data: { tgInfoMessageId: posted },
+      })
+    }
+    await prismaSupport.supportTicket.update({
+      where: { id: latest.id },
+      data: { tgInfoMessageId: posted },
+    })
+  } catch {
+    logger.warn('[zhora] ticket category card refresh failed')
   }
 }
 

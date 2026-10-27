@@ -118,6 +118,48 @@ async function customerMessage(text: string, language: string | null) {
 }
 
 describe('Zhora answer requests', () => {
+  it('shows only the quick action matching the ticket category', async () => {
+    for (const [category, label, prefix] of [
+      ['DEPOSIT', 'Депозиты', 'zd:'],
+      ['WITHDRAWAL', 'Выводы', 'zw:'],
+    ] as const) {
+      const { ticket, message } = await customerMessage('Question', 'en')
+      await prismaSupport.supportTicket.update({
+        where: { id: ticket.id },
+        data: {
+          category,
+          tgChatId: -1002000000001n,
+          tgTopicId: category === 'DEPOSIT' ? 801 : 802,
+        },
+      })
+      const job = await prismaSupport.zhoraJob.create({
+        data: {
+          eventKey: `quick:${ticket.id}`,
+          operation: 'reply',
+          input: {},
+          ticketId: ticket.id,
+          status: 'completed',
+          result: {
+            answer: 'Answer',
+            answerRu: 'Ответ',
+            needsReview: false,
+            sources: [],
+          },
+        },
+      })
+      const suggestion = await prismaSupport.zhoraSuggestion.create({
+        data: { jobId: job.id, targetMessageId: message.id, language: 'en' },
+      })
+      await runZhoraSuggestionPreviewPass()
+      const keyboard = vi.mocked(sendPlainMessage).mock.calls.at(-1)![0]
+        .replyMarkup!.inline_keyboard
+      expect(keyboard.at(-1)).toEqual([
+        { text: 'Карточка', callback_data: `zc:${suggestion.id}` },
+        { text: label, callback_data: `${prefix}${suggestion.id}` },
+      ])
+    }
+  })
+
   it('creates one paid job for a repeated event and stores only a draft', async () => {
     const { ticket, message } = await customerMessage('Kiedy wypłata?', 'pl')
     vi.mocked(buildZhoraContext).mockResolvedValue({

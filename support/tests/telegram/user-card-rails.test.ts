@@ -62,6 +62,17 @@ const render = (
 ): string => renderUserCard(card(deposits, over), 'ticket-abcdef123456')
 
 describe('ticket card — deposits by rail', () => {
+  test('shows the current ticket category when it is known', () => {
+    const tagged = renderUserCard(
+      card([]),
+      'ticket-abcdef123456',
+      null,
+      'WITHDRAWAL'
+    )
+    expect(tagged).toContain('Тема: <b>Вывод</b>')
+    expect(render([])).not.toContain('Тема:')
+  })
+
   test('roubles and hryvnias go in separate blocks', () => {
     const text = render([
       deposit({ rail: 'ru', currency: 'RUB', amount: '5000.00' }),

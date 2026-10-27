@@ -4,7 +4,11 @@ import path from 'path'
 import { Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy'
 import type { InlineKeyboardMarkup } from 'grammy/types'
 
-import type { SupportAttachment, SupportTicket } from '@prisma-support'
+import type {
+  SupportAttachment,
+  SupportTicket,
+  SupportTicketCategory,
+} from '@prisma-support'
 
 import {
   MAX_UPLOAD_BYTES,
@@ -17,6 +21,7 @@ import {
 import { logger } from '@config/logger'
 
 import { groupByRail } from '@core/card-rails'
+import { ticketCategoryLabel } from '@core/ticket-category'
 
 // Type-only, and it must stay that way: this module is the bottom of the
 // Telegram layer and a runtime import of an app service would close the cycle
@@ -95,9 +100,12 @@ export const ZHORA_TRANSLATE_CALLBACK_PREFIX = 'zt:'
 export const ZHORA_TRANSLATE_LANGUAGE_CALLBACK_PREFIX = 'ztl:'
 export const ZHORA_ALTERNATIVE_CALLBACK_PREFIX = 'za:'
 export const ZHORA_CARD_CALLBACK_PREFIX = 'zc:'
+export const ZHORA_DEPOSITS_CALLBACK_PREFIX = 'zd:'
+export const ZHORA_WITHDRAWALS_CALLBACK_PREFIX = 'zw:'
 export const ZHORA_TEMPLATE_CATEGORY_CALLBACK_PREFIX = 'tcat:'
 export const ZHORA_TEMPLATE_SELECT_CALLBACK_PREFIX = 'tsel:'
 export const ZHORA_TEMPLATE_SEND_CALLBACK_PREFIX = 'tsend:'
+export const ZHORA_TAG_CALLBACK_PREFIX = 'ztag:'
 
 /** Put the request action on a bot-authored copy of the customer message. */
 export async function attachZhoraReplyButton(args: {
@@ -714,7 +722,8 @@ function riskFlagNames(flags: unknown): string[] {
 export function renderUserCard(
   card: UserCard,
   ticketId: string,
-  originDomain?: string | null
+  originDomain?: string | null,
+  category?: SupportTicketCategory | null
 ): string {
   const lines: string[] = [
     `🎫 <b>Тикет</b> <code>${shortTicketId(ticketId)}</code>`,
@@ -723,6 +732,7 @@ export function renderUserCard(
 
   const name = esc(card.fullName)
   lines.push(`👤 ${name ? `<b>${name}</b> · ` : ''}<code>${card.nId}</code>`)
+  if (category) lines.push(`Тема: <b>${ticketCategoryLabel(category)}</b>`)
   if (card.isBlocked) lines.push('⛔️ <b>Аккаунт заблокирован</b>')
 
   const email = esc(card.email)
@@ -868,6 +878,7 @@ export async function editTicketCard(args: {
   userNId: number
   card: UserCard
   originDomain?: string | null
+  category?: SupportTicketCategory | null
 }): Promise<boolean> {
   const bot = getBot()
   if (!bot) return false
@@ -876,7 +887,12 @@ export async function editTicketCard(args: {
     bot.api.editMessageText(
       args.chatId,
       args.messageId,
-      renderUserCard(args.card, args.ticketId, args.originDomain),
+      renderUserCard(
+        args.card,
+        args.ticketId,
+        args.originDomain,
+        args.category
+      ),
       { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
     )
   )
@@ -892,6 +908,7 @@ export async function postTicketCard(args: {
   card: UserCard
   /** Mirror the ticket was opened from; null on tickets older than the column. */
   originDomain?: string | null
+  category?: SupportTicketCategory | null
 }): Promise<number | null> {
   const bot = getBot()
   if (!bot) return null
@@ -899,7 +916,12 @@ export async function postTicketCard(args: {
   const messageId = await sendToTopic({
     chatId: args.chatId,
     topicId: args.topicId,
-    text: renderUserCard(args.card, args.ticketId, args.originDomain),
+    text: renderUserCard(
+      args.card,
+      args.ticketId,
+      args.originDomain,
+      args.category
+    ),
   })
   if (messageId === null) return null
 
@@ -954,6 +976,7 @@ export async function createTicketTopic(args: {
   card: UserCard
   /** Mirror the ticket was opened from; null on tickets older than the column. */
   originDomain?: string | null
+  category?: SupportTicketCategory | null
   /** Title it as the user's permanent thread (`<nId> · <email>`). */
   threadTitle?: boolean
 }): Promise<TicketTopicBinding | null> {
@@ -994,6 +1017,7 @@ export async function createTicketTopic(args: {
     userNId: args.userNId,
     card: args.card,
     originDomain: args.originDomain,
+    category: args.category,
   })
 
   if (infoMessageId !== null) binding.infoMessageId = infoMessageId

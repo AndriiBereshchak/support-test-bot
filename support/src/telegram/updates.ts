@@ -31,11 +31,14 @@ import {
   ZHORA_SEND_CALLBACK_PREFIX,
   ZHORA_ALTERNATIVE_CALLBACK_PREFIX,
   ZHORA_CARD_CALLBACK_PREFIX,
+  ZHORA_DEPOSITS_CALLBACK_PREFIX,
   ZHORA_TRANSLATE_CALLBACK_PREFIX,
   ZHORA_TRANSLATE_LANGUAGE_CALLBACK_PREFIX,
   ZHORA_TEMPLATE_CATEGORY_CALLBACK_PREFIX,
   ZHORA_TEMPLATE_SELECT_CALLBACK_PREFIX,
   ZHORA_TEMPLATE_SEND_CALLBACK_PREFIX,
+  ZHORA_TAG_CALLBACK_PREFIX,
+  ZHORA_WITHDRAWALS_CALLBACK_PREFIX,
 } from '@telegram/api'
 
 import {
@@ -53,6 +56,8 @@ import {
 import { handleZhoraSendCallback } from './zhora-send'
 import { handleZhoraAlternativeCallback } from './zhora-alternative'
 import { handleZhoraCardCallback } from './zhora-card'
+import { setManualTag } from './zhora-tag'
+import { isTicketCategory } from '@core/ticket-category'
 import {
   selectTemplate,
   sendTemplateDraft,
@@ -198,8 +203,38 @@ async function onCallbackQuery(query: CallbackQuery): Promise<void> {
     return
   }
 
-  if (data.startsWith(ZHORA_CARD_CALLBACK_PREFIX)) {
-    const suggestionId = data.slice(ZHORA_CARD_CALLBACK_PREFIX.length)
+  if (data.startsWith(ZHORA_TAG_CALLBACK_PREFIX)) {
+    if (
+      query.from.is_bot ||
+      !message.is_topic_message ||
+      !message.message_thread_id ||
+      message.message_thread_id <= 1
+    )
+      return
+    const match = /^ztag:([0-9a-f-]{36}):([A-Z]+)$/.exec(data)
+    if (!match || !isTicketCategory(match[2]!)) return
+    await setManualTag({
+      chatId: message.chat.id,
+      topicId: message.message_thread_id,
+      fromId: query.from.id,
+      ticketId: match[1]!,
+      category: match[2],
+    })
+    return
+  }
+
+  const quickAction = data.startsWith(ZHORA_CARD_CALLBACK_PREFIX)
+    ? { action: 'card' as const, prefix: ZHORA_CARD_CALLBACK_PREFIX }
+    : data.startsWith(ZHORA_DEPOSITS_CALLBACK_PREFIX)
+      ? { action: 'deposits' as const, prefix: ZHORA_DEPOSITS_CALLBACK_PREFIX }
+      : data.startsWith(ZHORA_WITHDRAWALS_CALLBACK_PREFIX)
+        ? {
+            action: 'withdrawals' as const,
+            prefix: ZHORA_WITHDRAWALS_CALLBACK_PREFIX,
+          }
+        : null
+  if (quickAction) {
+    const suggestionId = data.slice(quickAction.prefix.length)
     if (
       !/^[0-9a-f-]{36}$/i.test(suggestionId) ||
       query.from.is_bot ||
@@ -213,6 +248,7 @@ async function onCallbackQuery(query: CallbackQuery): Promise<void> {
       topicId: message.message_thread_id,
       suggestionId,
       previewMessageId: message.message_id,
+      action: quickAction.action,
     })
     return
   }

@@ -33,6 +33,17 @@ enum SupportTicketStatus {
   CLOSED
 }
 
+enum SupportTicketCategory {
+  DEPOSIT
+  WITHDRAWAL
+  ACCOUNT
+  VERIFICATION
+  TRADING
+  PARTNERSHIP
+  APP
+  OTHER
+}
+
 // Who ended the ticket — drives both the closing system message wording and
 // support analytics.
 enum SupportTicketClosedBy {
@@ -101,6 +112,14 @@ model SupportTicket {
   detectedLang    String? @map("detected_lang") @db.VarChar(16)
   detectedLangSeq Int     @default(0) @map("detected_lang_seq")
 
+  // First customer messages drive at most two AI classifications. A manual
+  // choice is final for this ticket, including against an in-flight job.
+  category                SupportTicketCategory?
+  categoryManual          Boolean                @default(false) @map("category_manual")
+  categoryAttempt         Int                    @default(0) @map("category_attempt")
+  categoryJobId           String?                @map("category_job_id") @db.Uuid
+  categoryClassifyPending Boolean                @default(false) @map("category_classify_pending")
+
   // Telegram forum topic binding. chatId is stored per-ticket (not only in
   // env) so moving support to a new group never orphans historical threads.
   tgChatId        BigInt? @map("tg_chat_id")
@@ -154,6 +173,7 @@ model SupportTicket {
   @@index([tgChatId, tgTopicId])
   @@index([product, userId, createdAt])
   @@index([status, lastMessageAt])
+  @@index([categoryClassifyPending, categoryJobId])
   @@map("support_tickets")
 }
 

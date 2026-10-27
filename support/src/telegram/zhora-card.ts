@@ -2,7 +2,11 @@ import { prismaSupport } from '@config/database'
 import { logger } from '@config/logger'
 import { findTicketByTopic } from '@apps/services/ticket.service'
 import { sendPlainMessage } from './api'
-import { sendTicketCard } from './commands'
+import {
+  sendDepositsForTicket,
+  sendTicketCard,
+  sendWithdrawalsForTicket,
+} from './commands'
 
 /** Show the current ticket's card using the existing /info action. */
 export async function handleZhoraCardCallback(input: {
@@ -10,6 +14,7 @@ export async function handleZhoraCardCallback(input: {
   topicId: number
   suggestionId: string
   previewMessageId: number
+  action?: 'card' | 'deposits' | 'withdrawals'
 }): Promise<void> {
   const note = (text: string) =>
     sendPlainMessage({ chatId: input.chatId, topicId: input.topicId, text })
@@ -36,13 +41,35 @@ export async function handleZhoraCardCallback(input: {
       await note('Этот черновик относится к другому тикету.')
       return
     }
-    await sendTicketCard({
-      chatId: input.chatId,
-      topicId: input.topicId,
-      ticket,
-    })
+    if (input.action === 'deposits') {
+      if (ticket.category !== 'DEPOSIT') {
+        await note('Категория тикета изменилась. Используйте /deposits.')
+        return
+      }
+      await sendDepositsForTicket({
+        chatId: input.chatId,
+        topicId: input.topicId,
+        userId: ticket.userId,
+      })
+    } else if (input.action === 'withdrawals') {
+      if (ticket.category !== 'WITHDRAWAL') {
+        await note('Категория тикета изменилась. Используйте /withdrawals.')
+        return
+      }
+      await sendWithdrawalsForTicket({
+        chatId: input.chatId,
+        topicId: input.topicId,
+        userId: ticket.userId,
+      })
+    } else {
+      await sendTicketCard({
+        chatId: input.chatId,
+        topicId: input.topicId,
+        ticket,
+      })
+    }
   } catch {
     logger.warn('[zhora] operator card quick action failed')
-    await note('Не удалось получить карточку. Попробуйте /info.')
+    await note('Не удалось выполнить действие. Попробуйте позже.')
   }
 }

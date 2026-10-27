@@ -56,6 +56,7 @@ import { requestZhoraSuggestion } from '@apps/services/zhora/suggestion.service'
 import { requestZhoraFix } from '@apps/services/zhora/suggestion-fix.service'
 import { requestZhoraBrief } from '@apps/services/zhora/brief.service'
 import { handleTemplateCommand } from './zhora-template'
+import { showTagMenu } from './zhora-tag'
 
 import {
   deleteTopicMessage,
@@ -101,6 +102,7 @@ const HELP_TEXT = [
   '/fix — ответом на своё сообщение: подготовить исправленный вариант',
   '/brief — краткая сводка тикета для операторов',
   '/t — категории шаблонов; /t <код> — подготовить шаблон',
+  '/tag — выбрать категорию текущего тикета',
   '/me — моя карточка оператора',
   '/setname <имя> — имя, которое видит пользователь',
   '/settitle <текст> — подпись под именем; без текста — убрать',
@@ -316,6 +318,13 @@ export async function handleCommand(
         replyToMessageId: ctx.message.reply_to_message?.message_id,
       })
       return
+    case 'tag':
+      return showTagMenu({
+        chatId: ctx.chatId,
+        topicId: ctx.topicId,
+        fromId: ctx.fromId,
+        isBot: ctx.message.from?.is_bot,
+      })
     case 'brief': {
       const invocation = await prepareZhoraInvocation({
         chatId: ctx.chatId,
@@ -609,7 +618,7 @@ async function commandInfo(ctx: CommandContext): Promise<void> {
 export async function sendTicketCard(args: {
   chatId: number
   topicId: number
-  ticket: Pick<SupportTicket, 'id' | 'userId'>
+  ticket: Pick<SupportTicket, 'id' | 'userId' | 'originDomain' | 'category'>
 }): Promise<void> {
   const card = await getUserCard(args.ticket.userId)
   // The real ticket id, not a synthetic string: the card prints it inside
@@ -618,7 +627,12 @@ export async function sendTicketCard(args: {
   await sendToTopic({
     chatId: args.chatId,
     topicId: args.topicId,
-    text: renderUserCard(card, args.ticket.id),
+    text: renderUserCard(
+      card,
+      args.ticket.id,
+      args.ticket.originDomain,
+      args.ticket.category
+    ),
   })
 }
 
@@ -708,11 +722,23 @@ export async function renderDeposits(
 async function commandDeposits(ctx: CommandContext): Promise<void> {
   const found = await userOfTopic(ctx, 'deposits')
   if (!found) return
-
-  await sendToTopic({
+  await sendDepositsForTicket({
     chatId: ctx.chatId,
     topicId: found.topicId,
-    text: await renderDeposits(found.ticket.userId, 'all'),
+    userId: found.ticket.userId,
+  })
+}
+
+/** Shared by /deposits and the category-specific Zhora shortcut. */
+export async function sendDepositsForTicket(args: {
+  chatId: number
+  topicId: number
+  userId: string
+}): Promise<void> {
+  await sendToTopic({
+    chatId: args.chatId,
+    topicId: args.topicId,
+    text: await renderDeposits(args.userId, 'all'),
     keyboard: depositsKeyboard('all'),
   })
 }
@@ -727,11 +753,23 @@ async function commandDeposits(ctx: CommandContext): Promise<void> {
 async function commandWithdrawals(ctx: CommandContext): Promise<void> {
   const found = await userOfTopic(ctx, 'withdrawals')
   if (!found) return
-
-  await sendToTopic({
+  await sendWithdrawalsForTicket({
     chatId: ctx.chatId,
     topicId: found.topicId,
-    text: await renderWithdrawals(found.ticket.userId),
+    userId: found.ticket.userId,
+  })
+}
+
+/** Shared by /withdrawals and the category-specific Zhora shortcut. */
+export async function sendWithdrawalsForTicket(args: {
+  chatId: number
+  topicId: number
+  userId: string
+}): Promise<void> {
+  await sendToTopic({
+    chatId: args.chatId,
+    topicId: args.topicId,
+    text: await renderWithdrawals(args.userId),
   })
 }
 

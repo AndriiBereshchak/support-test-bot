@@ -116,6 +116,11 @@ export async function appendMessage(
           lastSeq: { increment: 1 },
           lastMessageAt: new Date(),
           ...(direction === 'IN' ? { lastUserMessageAt: new Date() } : {}),
+          // The same write that allocates the first/second customer message
+          // makes classification discoverable after a crash or relay retry.
+          ...(direction === 'IN' && input.translationPending
+            ? { categoryClassifyPending: true }
+            : {}),
           ...(direction === 'OUT'
             ? {
                 lastAgentMessageAt: new Date(),

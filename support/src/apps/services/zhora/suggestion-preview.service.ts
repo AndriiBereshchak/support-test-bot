@@ -5,8 +5,10 @@ import {
   sendPlainMessage,
   ZHORA_ALTERNATIVE_CALLBACK_PREFIX,
   ZHORA_CARD_CALLBACK_PREFIX,
+  ZHORA_DEPOSITS_CALLBACK_PREFIX,
   ZHORA_SEND_CALLBACK_PREFIX,
   ZHORA_TRANSLATE_CALLBACK_PREFIX,
+  ZHORA_WITHDRAWALS_CALLBACK_PREFIX,
 } from '@telegram/api'
 import { splitText, TELEGRAM_TEXT_LIMIT } from '@telegram/text'
 
@@ -98,7 +100,9 @@ export async function runZhoraSuggestionPreviewPass(): Promise<void> {
       targetMessage: {
         select: {
           tgMessageId: true,
-          ticket: { select: { tgChatId: true, tgTopicId: true } },
+          ticket: {
+            select: { tgChatId: true, tgTopicId: true, category: true },
+          },
         },
       },
     },
@@ -182,6 +186,21 @@ export async function runZhoraSuggestionPreviewPass(): Promise<void> {
                       text: 'Карточка',
                       callback_data: `${ZHORA_CARD_CALLBACK_PREFIX}${row.id}`,
                     },
+                    ...(row.targetMessage.ticket.category === 'DEPOSIT'
+                      ? [
+                          {
+                            text: 'Депозиты',
+                            callback_data: `${ZHORA_DEPOSITS_CALLBACK_PREFIX}${row.id}`,
+                          },
+                        ]
+                      : row.targetMessage.ticket.category === 'WITHDRAWAL'
+                        ? [
+                            {
+                              text: 'Выводы',
+                              callback_data: `${ZHORA_WITHDRAWALS_CALLBACK_PREFIX}${row.id}`,
+                            },
+                          ]
+                        : []),
                   ],
                 ],
               }

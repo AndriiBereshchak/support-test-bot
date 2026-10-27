@@ -8,13 +8,15 @@ export async function enqueueZhoraJob(args: {
   input: OpenRouterInput
   ticketId?: string | null
   agentId?: string | null
+  tx?: Prisma.TransactionClient
 }): Promise<ZhoraJob> {
   getZhoraModel(args.input)
   if (!args.eventKey.trim() || args.eventKey.length > 160)
     throw new Error('[zhora] invalid_job_event_key')
   const { systemPrompt, input, knowledge, cachePrompt } = args.input
+  const db = args.tx ?? prismaSupport
   try {
-    return await prismaSupport.zhoraJob.upsert({
+    return await db.zhoraJob.upsert({
       where: { eventKey: args.eventKey },
       create: {
         eventKey: args.eventKey,
@@ -35,7 +37,7 @@ export async function enqueueZhoraJob(args: {
       error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === 'P2002'
     ) {
-      const existing = await prismaSupport.zhoraJob
+      const existing = await db.zhoraJob
         .findUnique({ where: { eventKey: args.eventKey } })
         .catch(() => null)
       if (existing) return existing

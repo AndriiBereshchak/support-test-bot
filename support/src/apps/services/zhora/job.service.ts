@@ -28,6 +28,7 @@ import { generateZhoraTemplateTranslation } from './template.service'
 import { generateZhoraSuggestionAlternative } from './suggestion-alternative.service'
 import { generateZhoraSuggestionVariant } from './suggestion-variant.service'
 import { runZhoraSuggestionPreviewPass } from './suggestion-preview.service'
+import { runZhoraTicketCategoryPass } from './ticket-category.service'
 export { enqueueZhoraJob } from './job-enqueue.service'
 
 // Technical scheduling defaults, not product limits. One job at a time per
@@ -250,8 +251,10 @@ export function startZhoraWorker(): () => Promise<void> {
         nextKbDiscovery = Date.now() + (kbCursor ? 0 : KB_DISCOVERY_INTERVAL_MS)
       }
       await runZhoraTranslationPass()
+      await runZhoraTicketCategoryPass()
       await runZhoraJobPass(() => stopping)
       if (!stopping) await runZhoraTranslationPass()
+      if (!stopping) await runZhoraTicketCategoryPass()
       if (!stopping) await runZhoraSuggestionPreviewPass()
       if (!stopping) await runZhoraBriefDeliveryPass()
     })()
