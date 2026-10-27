@@ -35,6 +35,7 @@ import {
 } from './ticket.service'
 import { assertCanWrite } from './mute.service'
 import { getUserCard } from './user-card.service'
+import { updateSuggestionOutcomeAfterEdit } from './zhora/suggestion-outcome.service'
 import * as telegram from '@telegram/api'
 
 /**
@@ -585,6 +586,8 @@ export interface AgentSendInput {
   dedupeKey?: string
   /** Attachment rows already persisted by the Telegram download step. */
   attachmentIds?: string[]
+  /** A direct Zhora send or an operator reply to a saved preview. */
+  zhoraUse?: { suggestionId?: string; replyToTgMessageId?: number }
 }
 
 /**
@@ -627,6 +630,7 @@ export async function agentSendMessage(
       agentId,
       tgMessageId,
       attachmentIds,
+      zhoraUse: input.zhoraUse,
       dedupeKey:
         input.dedupeKey ??
         `tg:${ticket.tgChatId?.toString() ?? '0'}:${tgMessageId}`,
@@ -672,6 +676,8 @@ export async function agentEditMessage(
 ): Promise<void> {
   const updated = await editMessageByTelegramId(ticket, tgMessageId, text)
   if (!updated || !updated.editedAt) return
+
+  await updateSuggestionOutcomeAfterEdit(updated)
 
   await pushToUser(ticket.userId, {
     action: SUPPORT_WS_ACTIONS.messageUpdated,

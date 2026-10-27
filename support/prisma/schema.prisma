@@ -558,11 +558,19 @@ model ZhoraSuggestion {
   previewSentAt       DateTime?         @map("preview_sent_at") @db.Timestamptz()
   previewSendingUntil DateTime?         @map("preview_sending_until") @db.Timestamptz()
   nextChunkIndex      Int               @default(0) @map("next_chunk_index")
+  outcome             String?           @db.VarChar(16)
+  sentMessageId       String?           @unique @map("sent_message_id") @db.Uuid
+  usedVariantId       String?           @map("used_variant_id") @db.Uuid
+  finalText           String?           @map("final_text")
+  rating              Int?              @db.SmallInt
+  ratedAt             DateTime?         @map("rated_at") @db.Timestamptz()
+  ratedByTgUserId     BigInt?           @map("rated_by_tg_user_id")
   createdAt           DateTime          @default(now()) @map("created_at") @db.Timestamptz()
 
   @@unique([sourceSuggestionId, language])
   @@index([targetMessageId, createdAt])
   @@index([previewSentAt, previewSendingUntil])
+  @@index([outcome, previewSentAt])
   @@map("zhora_suggestions")
 }
 

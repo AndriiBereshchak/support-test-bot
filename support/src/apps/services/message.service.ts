@@ -7,6 +7,7 @@ import type {
 } from '@prisma-support'
 
 import { prismaSupport } from '@config/database'
+import { recordSuggestionOutcome } from './zhora/suggestion-outcome.service'
 
 export interface AppendMessageInput {
   ticketId: string
@@ -32,6 +33,8 @@ export interface AppendMessageInput {
   attachmentIds?: string[]
   /** Create a durable AI translation task with this customer message. */
   translationPending?: boolean
+  /** Present only for operator messages that can use a Zhora draft. */
+  zhoraUse?: { suggestionId?: string; replyToTgMessageId?: number }
   /**
    * Refuse the append unless the ticket is still OPEN, checked inside the same
    * locked write that allocates `seq` — so no `/close` can slip in between.
@@ -161,6 +164,10 @@ export async function appendMessage(
           where: { id: { in: attachmentIds }, ticketId, messageId: null },
           data: { messageId: created.id },
         })
+      }
+
+      if (input.zhoraUse && direction === 'OUT') {
+        await recordSuggestionOutcome(tx, created, input.zhoraUse)
       }
 
       return created

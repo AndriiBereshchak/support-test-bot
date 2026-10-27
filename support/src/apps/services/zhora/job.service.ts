@@ -29,6 +29,7 @@ import { generateZhoraSuggestionAlternative } from './suggestion-alternative.ser
 import { generateZhoraSuggestionVariant } from './suggestion-variant.service'
 import { runZhoraSuggestionPreviewPass } from './suggestion-preview.service'
 import { runZhoraTicketCategoryPass } from './ticket-category.service'
+import { finalizeIgnoredSuggestions } from './suggestion-outcome.service'
 export { enqueueZhoraJob } from './job-enqueue.service'
 
 // Technical scheduling defaults, not product limits. One job at a time per
@@ -257,6 +258,7 @@ export function startZhoraWorker(): () => Promise<void> {
       if (!stopping) await runZhoraTicketCategoryPass()
       if (!stopping) await runZhoraSuggestionPreviewPass()
       if (!stopping) await runZhoraBriefDeliveryPass()
+      if (!stopping) await finalizeIgnoredSuggestions()
     })()
       .catch(() => {
         logger.warn('[zhora] job pass failed; no automatic generation retry')

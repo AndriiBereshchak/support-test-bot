@@ -70,6 +70,11 @@ import { requestZhoraSuggestionVariant } from '@apps/services/zhora/suggestion-v
 import { runZhoraSuggestionPreviewPass } from '@apps/services/zhora/suggestion-preview.service'
 import { sendMonospaceMessage, sendPlainMessage } from '@telegram/api'
 
+const ratingRow = (id: string) => [
+  { text: '👍', callback_data: `zrate:${id}:1` },
+  { text: '👎', callback_data: `zrate:${id}:-1` },
+]
+
 beforeAll(() => {
   const cli = path.join(
     path.dirname(require.resolve('prisma/package.json')),
@@ -153,10 +158,11 @@ describe('Zhora answer requests', () => {
       await runZhoraSuggestionPreviewPass()
       const keyboard = vi.mocked(sendPlainMessage).mock.calls.at(-1)![0]
         .replyMarkup!.inline_keyboard
-      expect(keyboard.at(-1)).toEqual([
+      expect(keyboard.at(-2)).toEqual([
         { text: 'Карточка', callback_data: `zc:${suggestion.id}` },
         { text: label, callback_data: `${prefix}${suggestion.id}` },
       ])
+      expect(keyboard.at(-1)).toEqual(ratingRow(suggestion.id))
     }
   })
 
@@ -275,6 +281,7 @@ describe('Zhora answer requests', () => {
             { text: 'Ещё вариант', callback_data: `za:${first.suggestion.id}` },
           ],
           [{ text: 'Карточка', callback_data: `zc:${first.suggestion.id}` }],
+          ratingRow(first.suggestion.id),
         ],
       },
     })
@@ -352,6 +359,7 @@ describe('Zhora answer requests', () => {
           { text: 'Ещё вариант', callback_data: `za:${suggestion.id}` },
         ],
         [{ text: 'Карточка', callback_data: `zc:${suggestion.id}` }],
+        ratingRow(suggestion.id),
       ],
     })
     expect(vi.mocked(sendPlainMessage).mock.calls[0]![0].text).toContain(
@@ -416,6 +424,7 @@ describe('Zhora answer requests', () => {
               { text: 'Ещё вариант', callback_data: `za:${suggestion.id}` },
             ],
             [{ text: 'Карточка', callback_data: `zc:${suggestion.id}` }],
+            ratingRow(suggestion.id),
           ],
         })
       } else {
@@ -433,6 +442,7 @@ describe('Zhora answer requests', () => {
                   { text: 'Ещё вариант', callback_data: `za:${suggestion.id}` },
                 ],
                 [{ text: 'Карточка', callback_data: `zc:${suggestion.id}` }],
+                ratingRow(suggestion.id),
               ],
             },
           }
@@ -482,6 +492,7 @@ describe('Zhora answer requests', () => {
           { text: 'Ещё вариант', callback_data: `za:${suggestion.id}` },
         ],
         [{ text: 'Карточка', callback_data: `zc:${suggestion.id}` }],
+        ratingRow(suggestion.id),
       ],
     })
     expect(
@@ -613,6 +624,7 @@ describe('Zhora /fix drafts', () => {
       replyMarkup: {
         inline_keyboard: expect.arrayContaining([
           [{ text: 'Карточка', callback_data: `zc:${first.suggestion.id}` }],
+          ratingRow(first.suggestion.id),
         ]),
       },
     })
@@ -1032,6 +1044,7 @@ describe('Zhora translated variants', () => {
             },
           ],
           [{ text: 'Карточка', callback_data: `zc:${first.suggestion.id}` }],
+          ratingRow(first.suggestion.id),
         ],
       },
     })
@@ -1202,6 +1215,7 @@ describe('Zhora alternative drafts', () => {
             },
           ],
           [{ text: 'Карточка', callback_data: `zc:${first.suggestion.id}` }],
+          ratingRow(first.suggestion.id),
         ],
       },
     })

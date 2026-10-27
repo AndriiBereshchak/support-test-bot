@@ -58,6 +58,7 @@ export async function handleZhoraSendCallback(
       text: answer,
       tgMessageId: suggestion.previewTgMessageId,
       dedupeKey: `zhora:send:${suggestion.id}`,
+      zhoraUse: { suggestionId: suggestion.id },
     })
     await note(
       sent === 'closed'

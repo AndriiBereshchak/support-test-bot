@@ -9,6 +9,7 @@ import {
   ZHORA_SEND_CALLBACK_PREFIX,
   ZHORA_TRANSLATE_CALLBACK_PREFIX,
   ZHORA_WITHDRAWALS_CALLBACK_PREFIX,
+  ZHORA_RATING_CALLBACK_PREFIX,
 } from '@telegram/api'
 import { splitText, TELEGRAM_TEXT_LIMIT } from '@telegram/text'
 
@@ -201,6 +202,16 @@ export async function runZhoraSuggestionPreviewPass(): Promise<void> {
                             },
                           ]
                         : []),
+                  ],
+                  [
+                    {
+                      text: '👍',
+                      callback_data: `${ZHORA_RATING_CALLBACK_PREFIX}${row.id}:1`,
+                    },
+                    {
+                      text: '👎',
+                      callback_data: `${ZHORA_RATING_CALLBACK_PREFIX}${row.id}:-1`,
+                    },
                   ],
                 ],
               }

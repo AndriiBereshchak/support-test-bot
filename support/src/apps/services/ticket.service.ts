@@ -19,6 +19,7 @@ import type {
 import { AUTO_FAREWELL, AUTO_TEXT_FALLBACK } from '@core/contracts'
 
 import { appendMessage } from './message.service'
+import { finalizeIgnoredSuggestions } from './zhora/suggestion-outcome.service'
 import { toMessageDto, toTicketDto } from './mappers'
 
 const DEFAULT_PAGE_SIZE = 50
@@ -457,6 +458,11 @@ export async function closeTicket(
       closedBy,
       closedByAgentId,
     },
+  })
+
+  // Outcome accounting must finish even when the Zhora worker is disabled.
+  await finalizeIgnoredSuggestions(ticket.id).catch(() => {
+    logger.warn('[zhora] closed-ticket outcome finalization failed')
   })
 
   logger.info(`[ticket] closed ${ticketId} by ${closedBy}`)

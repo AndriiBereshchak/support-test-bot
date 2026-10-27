@@ -39,6 +39,7 @@ import {
   ZHORA_TEMPLATE_SEND_CALLBACK_PREFIX,
   ZHORA_TAG_CALLBACK_PREFIX,
   ZHORA_WITHDRAWALS_CALLBACK_PREFIX,
+  ZHORA_RATING_CALLBACK_PREFIX,
 } from '@telegram/api'
 
 import {
@@ -57,6 +58,7 @@ import { handleZhoraSendCallback } from './zhora-send'
 import { handleZhoraAlternativeCallback } from './zhora-alternative'
 import { handleZhoraCardCallback } from './zhora-card'
 import { setManualTag } from './zhora-tag'
+import { rateZhoraSuggestion } from './zhora-rating'
 import { isTicketCategory } from '@core/ticket-category'
 import {
   selectTemplate,
@@ -219,6 +221,27 @@ async function onCallbackQuery(query: CallbackQuery): Promise<void> {
       fromId: query.from.id,
       ticketId: match[1]!,
       category: match[2],
+    })
+    return
+  }
+
+  if (data.startsWith(ZHORA_RATING_CALLBACK_PREFIX)) {
+    if (
+      query.from.is_bot ||
+      !message.is_topic_message ||
+      !message.message_thread_id ||
+      message.message_thread_id <= 1
+    )
+      return
+    const match = /^zrate:([0-9a-f-]{36}):(-?1)$/.exec(data)
+    if (!match) return
+    await rateZhoraSuggestion({
+      chatId: message.chat.id,
+      topicId: message.message_thread_id,
+      fromId: query.from.id,
+      suggestionId: match[1]!,
+      previewMessageId: message.message_id,
+      rating: match[2] === '1' ? 1 : -1,
     })
     return
   }
@@ -446,6 +469,7 @@ async function onMessage(message: Message): Promise<void> {
     files,
     agentId: agent?.id ?? null,
     tgMessageId: message.message_id,
+    replyToTgMessageId: message.reply_to_message?.message_id,
   })
 }
 
@@ -479,6 +503,7 @@ interface RelayInput {
   agentId: string | null
   /** Telegram message id the dedupe key is derived from. */
   tgMessageId: number
+  replyToTgMessageId?: number
 }
 
 /**
@@ -534,6 +559,7 @@ async function relay(input: RelayInput): Promise<void> {
     agentId,
     tgMessageId,
     attachmentIds,
+    zhoraUse: { replyToTgMessageId: input.replyToTgMessageId },
   })
 
   // Telegram already showed the agent their own message, so swallowing it

@@ -862,6 +862,10 @@ describe('Zhora translation buttons', () => {
             },
           ],
           [{ text: 'Карточка', callback_data: `zc:${variant.id}` }],
+          [
+            { text: '👍', callback_data: `zrate:${variant.id}:1` },
+            { text: '👎', callback_data: `zrate:${variant.id}:-1` },
+          ],
         ],
       },
     })
