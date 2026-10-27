@@ -25,8 +25,11 @@ export type ZhoraOperation =
 export interface OpenRouterInput {
   operation: ZhoraOperation
   systemPrompt: string
+  /** Untrusted reference data; sent as user content before the live request. */
   knowledge?: string
   input: string
+  /** Stable routing key for repeated prompts in one ticket. */
+  sessionId?: string
   /** Explicit cache blocks: set only for a compatible model/provider.
    * Other providers may cache implicitly. This is not a response cache. */
   cachePrompt?: boolean
@@ -191,21 +194,28 @@ export async function generateZhoraText(
   input: OpenRouterInput
 ): Promise<OpenRouterResult> {
   const model = getZhoraModel(input)
-
-  const content = [
-    input.systemPrompt,
-    ...(input.knowledge ? [input.knowledge] : []),
-  ].map((text) => ({
-    type: 'text',
-    text,
-    ...(input.cachePrompt ? { cache_control: { type: 'ephemeral' } } : {}),
-  }))
+  // Explicit breakpoints are supported by Claude through OpenRouter. Other
+  // providers may cache implicitly, so do not send them a Claude directive.
+  const cacheControl =
+    input.cachePrompt && model.startsWith('anthropic/claude-')
+      ? { cache_control: { type: 'ephemeral' } }
+      : {}
+  const systemContent = [
+    { type: 'text', text: input.systemPrompt, ...cacheControl },
+  ]
+  const userContent = input.knowledge
+    ? [
+        { type: 'text', text: input.knowledge, ...cacheControl },
+        { type: 'text', text: input.input },
+      ]
+    : input.input
   const { body, details } = await requestGeneration('chat/completions', model, {
     stream: false,
     max_tokens: ZHORA_MAX_OUTPUT_TOKENS,
+    ...(input.sessionId ? { session_id: input.sessionId } : {}),
     messages: [
-      { role: 'system', content },
-      { role: 'user', content: input.input },
+      { role: 'system', content: systemContent },
+      { role: 'user', content: userContent },
     ],
   })
   const choice = object(

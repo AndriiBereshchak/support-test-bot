@@ -160,29 +160,53 @@ describe('OpenRouter client', () => {
     expect(request).toHaveBeenCalledTimes(1)
   })
 
-  it('supports explicit caching for stable system and knowledge blocks', async () => {
+  it('caches stable rules and user-role KB only for compatible Claude models', async () => {
     request.mockResolvedValue(new Response(JSON.stringify(completion())))
+    settings.ZHORA_MODEL_REPLY = 'anthropic/claude-haiku-test'
     await generateZhoraText({
       ...prompt,
-      operation: 'translate',
       knowledge: 'Approved KB',
       cachePrompt: true,
+      sessionId: 'zhora:reply:synthetic-ticket',
     })
     const body = JSON.parse(String(request.mock.calls[0]![1]!.body))
-    expect(body.model).toBe('test/translate')
+    expect(body.model).toBe('anthropic/claude-haiku-test')
+    expect(body.session_id).toBe('zhora:reply:synthetic-ticket')
     expect(body.messages[0].content).toEqual([
       {
         type: 'text',
         text: prompt.systemPrompt,
         cache_control: { type: 'ephemeral' },
       },
-      {
-        type: 'text',
-        text: 'Approved KB',
-        cache_control: { type: 'ephemeral' },
-      },
     ])
-    expect(body.messages[1]).toEqual({ role: 'user', content: prompt.input })
+    expect(body.messages[1]).toEqual({
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: 'Approved KB',
+          cache_control: { type: 'ephemeral' },
+        },
+        { type: 'text', text: prompt.input },
+      ],
+    })
+  })
+
+  it('keeps KB as user data without explicit cache markers for other models', async () => {
+    request.mockResolvedValue(new Response(JSON.stringify(completion())))
+    await generateZhoraText({
+      ...prompt,
+      knowledge: 'Approved KB',
+      cachePrompt: true,
+    })
+    const body = JSON.parse(String(request.mock.calls[0]![1]!.body))
+    expect(body.messages[0].content).toEqual([
+      { type: 'text', text: prompt.systemPrompt },
+    ])
+    expect(body.messages[1].content).toEqual([
+      { type: 'text', text: 'Approved KB' },
+      { type: 'text', text: prompt.input },
+    ])
   })
 
   it('can switch replies to another model without changing tags or candidate drafts', async () => {

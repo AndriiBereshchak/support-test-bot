@@ -123,7 +123,9 @@ describe('Zhora reply prompt and result', () => {
     const prompt = buildZhoraReplyPrompt(context(), 'en')
     const payload = JSON.parse(prompt.input)
     expect(prompt.operation).toBe('reply')
-    expect(prompt.knowledge).toBeUndefined()
+    expect(prompt.cachePrompt).toBe(true)
+    expect(prompt.sessionId).toMatch(/^zhora:reply:[0-9a-f]{64}$/)
+    expect(prompt.sessionId).not.toContain('private-ticket-id')
     expect(payload.targetMessage).toEqual({
       seq: 1,
       author: 'customer',
@@ -140,7 +142,8 @@ describe('Zhora reply prompt and result', () => {
       usd: '5.00',
       status: 'PENDING',
     })
-    expect(payload.knowledge).toEqual([
+    expect(payload.knowledge).toBeUndefined()
+    expect(JSON.parse(prompt.knowledge!).knowledge).toEqual([
       {
         id: 'kb-1',
         category: 'withdrawal',
@@ -157,9 +160,9 @@ describe('Zhora reply prompt and result', () => {
     expect(payload.reviewRequired).toBe(false)
     // Every excluded fixture value has this prefix, including attachment names
     // and the separate searchQuery. Free text in this fixture contains none.
-    expect(prompt.input).not.toContain('private-')
-    expect(prompt.input).not.toContain('123456')
-    expect(prompt.input).not.toContain('987654')
+    expect(prompt.input + prompt.knowledge).not.toContain('private-')
+    expect(prompt.input + prompt.knowledge).not.toContain('123456')
+    expect(prompt.input + prompt.knowledge).not.toContain('987654')
   })
 
   it('resolves shared KB links at reply time and flags missing config for review', () => {
@@ -177,11 +180,13 @@ describe('Zhora reply prompt and result', () => {
       updatedById: 'test-user',
       updatedAt: new Date(),
     }
-    const payload = JSON.parse(buildZhoraReplyPrompt(data, 'en').input)
-    expect(payload.knowledge[0].answer_ru).toBe(
+    const prompt = buildZhoraReplyPrompt(data, 'en')
+    const payload = JSON.parse(prompt.input)
+    const knowledge = JSON.parse(prompt.knowledge!).knowledge
+    expect(knowledge[0].answer_ru).toBe(
       'Откройте https://example.test/full. Ваш ID: {nId}.'
     )
-    expect(payload.knowledge[0].translation).toBe(
+    expect(knowledge[0].translation).toBe(
       'Open https://example.test/ios. Your ID: {nId}.'
     )
     expect(payload.reviewRequired).toBe(false)
@@ -216,6 +221,7 @@ describe('Zhora reply prompt and result', () => {
     )
     expect(prompt.systemPrompt).not.toContain(injection)
     expect(JSON.parse(prompt.input).history[0].text).toBe(injection)
+    expect(prompt.knowledge).toContain(injection)
     data.ticket.originDomain = 'binodex.app'
     expect(buildZhoraReplyPrompt(data, 'en').systemPrompt).not.toContain(
       'Domain restriction:'
@@ -291,11 +297,10 @@ describe('Zhora reply prompt and result', () => {
         ...reply(),
         sourceKbIds: data.knowledge?.length ? ['kb-1'] : [],
       }
-      const payload = JSON.parse(buildZhoraReplyPrompt(data, 'en').input)
+      const prompt = buildZhoraReplyPrompt(data, 'en')
+      const payload = JSON.parse(prompt.input)
       expect(payload.reviewRequired).toBe(true)
-      expect(payload.knowledge).toEqual(
-        data.knowledge === null ? null : expect.any(Array)
-      )
+      expect(prompt.knowledge === undefined).toBe(!data.knowledge?.length)
       expect(parseZhoraReply(JSON.stringify(output), data).needsReview).toBe(
         true
       )

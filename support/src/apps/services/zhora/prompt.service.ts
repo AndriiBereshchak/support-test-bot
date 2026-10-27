@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { ApiError } from '@core/errors/api-error'
 import type { ZhoraContext } from './context.service'
 import type { OpenRouterInput } from './openrouter'
@@ -168,34 +169,33 @@ export function buildZhoraReplyPrompt(
         createdAt: row.createdAt,
         isFake: row.isFake,
       })) ?? null,
-    knowledge:
-      context.knowledge?.map((entry) => {
-        const translations = entry.translations
-        const translation =
-          translations &&
-          typeof translations === 'object' &&
-          !Array.isArray(translations)
-            ? translations[language]
-            : null
-        return {
-          id: entry.id,
-          category: entry.category,
-          question: entry.question,
-          variants: entry.variants,
-          answer_ru: resolveKbLinks(entry.answer_ru, context.kbConfig),
-          translation:
-            typeof translation === 'string'
-              ? resolveKbLinks(translation, context.kbConfig)
-              : null,
-          notes: entry.notes,
-          dynamic_fields: entry.dynamic_fields,
-          ask_user: entry.ask_user,
-          is_temporary: entry.is_temporary,
-        }
-      }) ?? null,
     unavailable: context.unavailable,
     reviewRequired: contextNeedsReview(context),
   }
+  const knowledge = context.knowledge?.map((entry) => {
+    const translations = entry.translations
+    const translation =
+      translations &&
+      typeof translations === 'object' &&
+      !Array.isArray(translations)
+        ? translations[language]
+        : null
+    return {
+      id: entry.id,
+      category: entry.category,
+      question: entry.question,
+      variants: entry.variants,
+      answer_ru: resolveKbLinks(entry.answer_ru, context.kbConfig),
+      translation:
+        typeof translation === 'string'
+          ? resolveKbLinks(translation, context.kbConfig)
+          : null,
+      notes: entry.notes,
+      dynamic_fields: entry.dynamic_fields,
+      ask_user: entry.ask_user,
+      is_temporary: entry.is_temporary,
+    }
+  })
   return {
     operation: 'reply',
     systemPrompt:
@@ -203,8 +203,11 @@ export function buildZhoraReplyPrompt(
       (domain === 'binodex.io'
         ? '\n\nDomain restriction: on binodex.io never mention binary options in either answer or answerRu, regardless of what history or knowledge says.'
         : ''),
-    // KB belongs to the data message, not OpenRouterInput.knowledge, which the
-    // current transport appends to the system message. No implicit cache opt-in.
+    // Keep retrieved KB in the user role. A repeated selection can be cached
+    // without making untrusted KB text part of the system instructions.
+    ...(knowledge?.length ? { knowledge: JSON.stringify({ knowledge }) } : {}),
+    cachePrompt: true,
+    sessionId: `zhora:reply:${createHash('sha256').update(context.ticket.id).digest('hex')}`,
     input: JSON.stringify(payload),
   }
 }
