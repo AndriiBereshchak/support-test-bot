@@ -55,6 +55,7 @@ import { prepareZhoraInvocation } from './zhora'
 import { requestZhoraSuggestion } from '@apps/services/zhora/suggestion.service'
 import { requestZhoraFix } from '@apps/services/zhora/suggestion-fix.service'
 import { requestZhoraBrief } from '@apps/services/zhora/brief.service'
+import { handleTemplateCommand } from './zhora-template'
 
 import {
   deleteTopicMessage,
@@ -99,6 +100,7 @@ const HELP_TEXT = [
   '/fix <текст> — подготовить исправленный ответ без отправки клиенту',
   '/fix — ответом на своё сообщение: подготовить исправленный вариант',
   '/brief — краткая сводка тикета для операторов',
+  '/t — категории шаблонов; /t <код> — подготовить шаблон',
   '/me — моя карточка оператора',
   '/setname <имя> — имя, которое видит пользователь',
   '/settitle <текст> — подпись под именем; без текста — убрать',
@@ -303,6 +305,17 @@ export async function handleCommand(
     }
     case 'fix':
       return commandFix(ctx, command.args)
+    case 't':
+      await handleTemplateCommand({
+        chatId: ctx.chatId,
+        topicId: ctx.topicId,
+        fromId: ctx.fromId,
+        isBot: ctx.message.from?.is_bot,
+        eventKey: `template:cmd:${ctx.chatId}:${ctx.message.message_id}`,
+        args: command.args,
+        replyToMessageId: ctx.message.reply_to_message?.message_id,
+      })
+      return
     case 'brief': {
       const invocation = await prepareZhoraInvocation({
         chatId: ctx.chatId,

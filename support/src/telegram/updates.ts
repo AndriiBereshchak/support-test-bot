@@ -33,6 +33,9 @@ import {
   ZHORA_CARD_CALLBACK_PREFIX,
   ZHORA_TRANSLATE_CALLBACK_PREFIX,
   ZHORA_TRANSLATE_LANGUAGE_CALLBACK_PREFIX,
+  ZHORA_TEMPLATE_CATEGORY_CALLBACK_PREFIX,
+  ZHORA_TEMPLATE_SELECT_CALLBACK_PREFIX,
+  ZHORA_TEMPLATE_SEND_CALLBACK_PREFIX,
 } from '@telegram/api'
 
 import {
@@ -50,6 +53,11 @@ import {
 import { handleZhoraSendCallback } from './zhora-send'
 import { handleZhoraAlternativeCallback } from './zhora-alternative'
 import { handleZhoraCardCallback } from './zhora-card'
+import {
+  selectTemplate,
+  sendTemplateDraft,
+  showTemplateCategory,
+} from './zhora-template'
 import {
   handleZhoraTranslationMenu,
   handleZhoraTranslationSelection,
@@ -132,6 +140,63 @@ async function onCallbackQuery(query: CallbackQuery): Promise<void> {
   const message = query.message
   if (!message) return
   if (message.chat.id !== Number(TELEGRAM_CHAT_ID)) return
+
+  if (data.startsWith(ZHORA_TEMPLATE_CATEGORY_CALLBACK_PREFIX)) {
+    if (
+      query.from.is_bot ||
+      !message.is_topic_message ||
+      !message.message_thread_id
+    )
+      return
+    const categoryKey = data.slice(
+      ZHORA_TEMPLATE_CATEGORY_CALLBACK_PREFIX.length
+    )
+    if (!/^[0-9a-f]{16}$/.test(categoryKey)) return
+    await showTemplateCategory({
+      chatId: message.chat.id,
+      topicId: message.message_thread_id,
+      fromId: query.from.id,
+      categoryKey,
+    })
+    return
+  }
+  if (data.startsWith(ZHORA_TEMPLATE_SELECT_CALLBACK_PREFIX)) {
+    if (
+      query.from.is_bot ||
+      !message.is_topic_message ||
+      !message.message_thread_id
+    )
+      return
+    const templateId = data.slice(ZHORA_TEMPLATE_SELECT_CALLBACK_PREFIX.length)
+    if (!/^[0-9a-f-]{36}$/i.test(templateId)) return
+    await selectTemplate({
+      chatId: message.chat.id,
+      topicId: message.message_thread_id,
+      fromId: query.from.id,
+      eventKey: `template:tap:${query.id}`,
+      templateId,
+    })
+    return
+  }
+  if (data.startsWith(ZHORA_TEMPLATE_SEND_CALLBACK_PREFIX)) {
+    if (
+      query.from.is_bot ||
+      !message.is_topic_message ||
+      !message.message_thread_id
+    )
+      return
+    const match = /^tsend:([0-9a-f-]{36}):(\d+)$/.exec(data)
+    if (!match) return
+    await sendTemplateDraft({
+      chatId: message.chat.id,
+      topicId: message.message_thread_id,
+      fromId: query.from.id,
+      draftId: match[1]!,
+      version: Number(match[2]),
+      previewMessageId: message.message_id,
+    })
+    return
+  }
 
   if (data.startsWith(ZHORA_CARD_CALLBACK_PREFIX)) {
     const suggestionId = data.slice(ZHORA_CARD_CALLBACK_PREFIX.length)

@@ -142,6 +142,7 @@ model SupportTicket {
   zhoraCalls          ZhoraLlmCall[]
   zhoraJobs           ZhoraJob[]
   zhoraTemplateUsages ZhoraTemplateUsage[]
+  zhoraTemplateDrafts ZhoraTemplateDraft[]
 
   // A topic now holds EVERY ticket of one user (see SupportUserThread), so the
   // old `@@unique([tgChatId, tgTopicId])` had to go: it is precisely the rule
@@ -607,6 +608,7 @@ model ZhoraTemplate {
 
   translations ZhoraTemplateTranslation[]
   usages       ZhoraTemplateUsage[]
+  drafts       ZhoraTemplateDraft[]
 
   @@index([category, code])
   @@map("zhora_templates")
@@ -630,19 +632,54 @@ model ZhoraTemplateTranslation {
 // Recorded only when a template is actually used; block 25 will write rows.
 // Code and Telegram identity survive removal of a template or agent profile.
 model ZhoraTemplateUsage {
-  id               String         @id @default(uuid()) @db.Uuid
-  templateId       String?        @map("template_id") @db.Uuid
-  template         ZhoraTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
-  templateCode     String         @map("template_code") @db.VarChar(64)
-  ticketId         String?        @map("ticket_id") @db.Uuid
-  ticket           SupportTicket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
-  agentId          String?        @map("agent_id") @db.Uuid
-  agent            SupportAgent?  @relation(fields: [agentId], references: [id], onDelete: SetNull)
-  operatorTgUserId BigInt         @map("operator_tg_user_id")
-  editedBeforeSend Boolean        @default(false) @map("edited_before_send")
-  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz()
+  id               String              @id @default(uuid()) @db.Uuid
+  templateId       String?             @map("template_id") @db.Uuid
+  template         ZhoraTemplate?      @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  templateCode     String              @map("template_code") @db.VarChar(64)
+  ticketId         String?             @map("ticket_id") @db.Uuid
+  ticket           SupportTicket?      @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  agentId          String?             @map("agent_id") @db.Uuid
+  agent            SupportAgent?       @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  operatorTgUserId BigInt              @map("operator_tg_user_id")
+  editedBeforeSend Boolean             @default(false) @map("edited_before_send")
+  draftId          String?             @unique @map("draft_id") @db.Uuid
+  draft            ZhoraTemplateDraft? @relation(fields: [draftId], references: [id], onDelete: SetNull)
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz()
 
   @@index([templateId, createdAt])
   @@index([ticketId, createdAt])
   @@map("zhora_template_usages")
+}
+
+// One operator-only preview. Its version invalidates buttons on older previews
+// after a value is filled or the text is edited. A single dedupe key covers all
+// versions so concurrent taps cannot create two customer messages.
+model ZhoraTemplateDraft {
+  id                  String        @id @default(uuid()) @db.Uuid
+  eventKey            String        @unique @map("event_key") @db.VarChar(160)
+  templateId          String        @map("template_id") @db.Uuid
+  template            ZhoraTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  ticketId            String        @map("ticket_id") @db.Uuid
+  ticket              SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  language            String        @db.VarChar(16)
+  templateRevision    Int           @map("template_revision")
+  templateUpdatedAt   DateTime      @map("template_updated_at") @db.Timestamptz()
+  requestedByTgUserId BigInt        @map("requested_by_tg_user_id")
+  values              Json
+  text                String?
+  missing             String[]      @default([])
+  editedBeforeSend    Boolean       @default(false) @map("edited_before_send")
+  previewVersion      Int           @default(1) @map("preview_version")
+  previewTgMessageId  Int?          @map("preview_tg_message_id")
+  previewSendingUntil DateTime?     @map("preview_sending_until") @db.Timestamptz()
+  nextChunkIndex      Int           @default(0) @map("next_chunk_index")
+  sentByTgUserId      BigInt?       @map("sent_by_tg_user_id")
+  sentMessageId       String?       @map("sent_message_id") @db.Uuid
+  createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt           DateTime      @updatedAt @map("updated_at") @db.Timestamptz()
+
+  usage ZhoraTemplateUsage?
+
+  @@index([ticketId, createdAt])
+  @@map("zhora_template_drafts")
 }

@@ -41,7 +41,7 @@ export interface ZhoraTemplateUsageQuery {
   offset?: number
 }
 
-function sourceHash(text: string): string {
+export function sourceHash(text: string): string {
   return createHash('sha256').update(text).digest('hex')
 }
 

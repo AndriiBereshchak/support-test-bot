@@ -420,6 +420,7 @@ async function readyDraft() {
 const outgoing = () =>
   prismaSupport.supportMessage.findMany({
     where: { ticketId: ticket.id, direction: 'OUT' },
+    orderBy: { seq: 'asc' },
   })
 
 describe('Zhora operator-approved sending', () => {
