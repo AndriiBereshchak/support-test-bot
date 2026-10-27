@@ -138,9 +138,10 @@ model SupportTicket {
   messages    SupportMessage[]
   attachments SupportAttachment[]
 
-  operatorActions OperatorAction[]
-  zhoraCalls      ZhoraLlmCall[]
-  zhoraJobs       ZhoraJob[]
+  operatorActions     OperatorAction[]
+  zhoraCalls          ZhoraLlmCall[]
+  zhoraJobs           ZhoraJob[]
+  zhoraTemplateUsages ZhoraTemplateUsage[]
 
   // A topic now holds EVERY ticket of one user (see SupportUserThread), so the
   // old `@@unique([tgChatId, tgTopicId])` had to go: it is precisely the rule
@@ -293,9 +294,10 @@ model SupportAgent {
   id       String @id @default(uuid()) @db.Uuid
   tgUserId BigInt @unique @map("tg_user_id")
 
-  operatorActions OperatorAction[]
-  zhoraCalls      ZhoraLlmCall[]
-  zhoraJobs       ZhoraJob[]
+  operatorActions     OperatorAction[]
+  zhoraCalls          ZhoraLlmCall[]
+  zhoraJobs           ZhoraJob[]
+  zhoraTemplateUsages ZhoraTemplateUsage[]
 
   displayName String  @map("display_name") @db.VarChar(64)
   // Stored file name inside the shared support-files directory (served by
@@ -588,4 +590,59 @@ model ZhoraKbConfig {
   updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz()
 
   @@map("zhora_kb_config")
+}
+
+// Russian master text and the placeholders it requires. Translation rows
+// carry their own source version so manual edits survive master changes.
+model ZhoraTemplate {
+  id          String   @id @default(uuid()) @db.Uuid
+  code        String   @unique @db.VarChar(64)
+  category    String   @db.VarChar(128)
+  textRu      String   @map("text_ru")
+  variables   String[] @default([])
+  revision    Int      @default(1)
+  updatedById String   @map("updated_by_id")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  translations ZhoraTemplateTranslation[]
+  usages       ZhoraTemplateUsage[]
+
+  @@index([category, code])
+  @@map("zhora_templates")
+}
+
+model ZhoraTemplateTranslation {
+  templateId  String        @map("template_id") @db.Uuid
+  template    ZhoraTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  language    String        @db.VarChar(16)
+  text        String?
+  // The RU master hash at the last successful generation or manual review.
+  sourceHash  String        @map("source_hash") @db.VarChar(64)
+  isManual    Boolean       @default(false) @map("is_manual")
+  updatedById String?       @map("updated_by_id")
+  updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@id([templateId, language])
+  @@map("zhora_template_translations")
+}
+
+// Recorded only when a template is actually used; block 25 will write rows.
+// Code and Telegram identity survive removal of a template or agent profile.
+model ZhoraTemplateUsage {
+  id               String         @id @default(uuid()) @db.Uuid
+  templateId       String?        @map("template_id") @db.Uuid
+  template         ZhoraTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  templateCode     String         @map("template_code") @db.VarChar(64)
+  ticketId         String?        @map("ticket_id") @db.Uuid
+  ticket           SupportTicket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  agentId          String?        @map("agent_id") @db.Uuid
+  agent            SupportAgent?  @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  operatorTgUserId BigInt         @map("operator_tg_user_id")
+  editedBeforeSend Boolean        @default(false) @map("edited_before_send")
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@index([templateId, createdAt])
+  @@index([ticketId, createdAt])
+  @@map("zhora_template_usages")
 }

@@ -1,8 +1,7 @@
 import { extname } from 'node:path'
 import type { FastifyPluginAsync } from 'fastify'
-import { INTERNAL_TOKEN } from '@config/env'
 import { ApiError } from '@core/errors/api-error'
-import { constantTimeEqual } from '@core/utils/constant-time'
+import { requireZhoraManagementToken } from './zhora-management-auth'
 import {
   createZhoraKbEntry,
   deleteZhoraKbEntry,
@@ -48,16 +47,7 @@ const params = {
 } as const
 
 export const zhoraKbRoutes: FastifyPluginAsync = async (app) => {
-  app.addHook('onRequest', async (request) => {
-    const token = request.headers['x-internal-token']
-    if (
-      !INTERNAL_TOKEN ||
-      typeof token !== 'string' ||
-      !constantTimeEqual(token, INTERNAL_TOKEN)
-    ) {
-      throw new ApiError('Unauthorized', 401)
-    }
-  })
+  app.addHook('onRequest', requireZhoraManagementToken)
 
   // multipart/form-data: one UTF-8 .json/.csv file and updatedById field.
   // JSON accepts a flat array or a document. The document may update links.

@@ -113,7 +113,11 @@ describe('Zhora Telegram preflight', () => {
     const first = command()
     await handleUpdate(first)
     await handleUpdate(first)
-    expect(await prismaSupport.zhoraSuggestion.count()).toBe(1)
+    expect(
+      await prismaSupport.zhoraSuggestion.count({
+        where: { targetMessage: { ticketId: ticket.id } },
+      })
+    ).toBe(1)
 
     const tapped = callbackUpdate({
       topicId: ticket.tgTopicId!,
@@ -123,7 +127,11 @@ describe('Zhora Telegram preflight', () => {
     })
     await handleUpdate(tapped)
     await handleUpdate(tapped)
-    expect(await prismaSupport.zhoraSuggestion.count()).toBe(2)
+    expect(
+      await prismaSupport.zhoraSuggestion.count({
+        where: { targetMessage: { ticketId: ticket.id } },
+      })
+    ).toBe(2)
     // A request queues the draft; only the worker sends the finished preview.
     expect(sent()).not.toHaveBeenCalled()
     expect(pushToUser).not.toHaveBeenCalled()
